@@ -38,7 +38,7 @@ export async function GET() {
         quantity: o.quantity,
         price: o.price,
         status: o.status,
-        createdAt: o.createdAt,
+        submittedAt: o.submittedAt,
       })),
     });
   } catch (error) {

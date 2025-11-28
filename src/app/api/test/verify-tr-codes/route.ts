@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/lib/db/client';
-import { credentials } from '@/lib/db/schema';
 import { KISClient } from '@/lib/kis/client';
 import { getDecryptedCredentials } from '@/lib/crypto/encryption';
 
