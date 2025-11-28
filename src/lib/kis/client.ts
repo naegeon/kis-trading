@@ -1134,16 +1134,17 @@ export class KISClient {
     try {
       const response = await this._request('GET', path, trId, {}, params) as {
         output: Array<{
-          ODNO: string;           // 주문번호
-          PDNO: string;           // 종목코드
-          OVRS_EXCG_CD: string;   // 거래소코드
-          SLL_BUY_DVSN_CD: string; // 매도매수구분 (01: 매도, 02: 매수)
-          ORD_DVSN_CD: string;    // 주문구분 (00: 지정가, 32: LOO, 34: LOC 등)
-          ORD_QTY: string;        // 주문수량
-          OVRS_ORD_UNPR: string;  // 주문단가
-          NCCS_QTY: string;       // 미체결수량
-          ORD_TMD: string;        // 주문시간
-          PRCS_STAT_NAME: string; // 처리상태명
+          odno: string;           // 주문번호
+          pdno: string;           // 종목코드
+          ovrs_excg_cd: string;   // 거래소코드
+          sll_buy_dvsn_cd: string; // 매도매수구분 (01: 매도, 02: 매수)
+          ord_dvsn_cd?: string;   // 주문구분 (00: 지정가, 32: LOO, 34: LOC 등) - 일부 응답에서 누락될 수 있음
+          sll_buy_dvsn_cd_name?: string; // 주문구분명 (LOO매수, LOC매수 등)
+          ft_ord_qty: string;     // 주문수량
+          ft_ord_unpr3: string;   // 주문단가
+          nccs_qty: string;       // 미체결수량
+          ord_tmd: string;        // 주문시간
+          prcs_stat_name: string; // 처리상태명
         }>;
       };
 
@@ -1154,18 +1155,18 @@ export class KISClient {
       // 특정 종목 필터링 (symbol이 제공된 경우)
       let orders = response.output;
       if (symbol) {
-        orders = orders.filter(o => o.PDNO.toUpperCase() === symbol.toUpperCase());
+        orders = orders.filter(o => o.pdno.toUpperCase() === symbol.toUpperCase());
       }
 
       return orders.map(o => ({
-        orderId: o.ODNO,
-        symbol: o.PDNO,
-        side: o.SLL_BUY_DVSN_CD === '02' ? 'BUY' : 'SELL' as 'BUY' | 'SELL',
-        orderType: this.parseOrderTypeCode(o.ORD_DVSN_CD),
-        quantity: parseInt(o.ORD_QTY, 10),
-        price: parseFloat(o.OVRS_ORD_UNPR),
-        unfilledQuantity: parseInt(o.NCCS_QTY, 10),
-        orderTime: o.ORD_TMD,
+        orderId: o.odno,
+        symbol: o.pdno,
+        side: o.sll_buy_dvsn_cd === '02' ? 'BUY' : 'SELL' as 'BUY' | 'SELL',
+        orderType: this.parseOrderTypeFromName(o.sll_buy_dvsn_cd_name || '', o.ord_dvsn_cd),
+        quantity: parseInt(o.ft_ord_qty, 10),
+        price: parseFloat(o.ft_ord_unpr3),
+        unfilledQuantity: parseInt(o.nccs_qty, 10),
+        orderTime: o.ord_tmd,
       }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -1185,6 +1186,25 @@ export class KISClient {
       '34': 'LOC',
     };
     return types[code] || code;
+  }
+
+  /**
+   * 주문구분명(sll_buy_dvsn_cd_name)에서 주문 타입 추출
+   * 예: "LOO매수" -> "LOO", "LOC매도" -> "LOC", "지정가매수" -> "LIMIT"
+   */
+  private parseOrderTypeFromName(name: string, code?: string): string {
+    // 먼저 이름에서 추출 시도
+    if (name.includes('LOO')) return 'LOO';
+    if (name.includes('LOC')) return 'LOC';
+    if (name.includes('시장가')) return 'MARKET';
+    if (name.includes('지정가')) return 'LIMIT';
+
+    // 이름으로 판단 못하면 코드로 시도
+    if (code) {
+      return this.parseOrderTypeCode(code);
+    }
+
+    return name || 'UNKNOWN';
   }
 
   async getPendingOrders(): Promise<Order[]> {
