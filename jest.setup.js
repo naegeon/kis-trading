@@ -1,0 +1,2 @@
+const MOCK_ENCRYPTION_KEY = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'; // 64-char hex
+process.env.ENCRYPTION_KEY = MOCK_ENCRYPTION_KEY;
