@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  * - 전략이 삭제되었거나 비활성화된 주문 취소
  * - DB에 SUBMITTED인데 전략이 없는 주문 정리
  */
-export async function POST(request: Request) {
+export async function POST(_request: Request) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
@@ -173,7 +173,7 @@ export async function POST(request: Request) {
 /**
  * 고아 주문 조회 (정리하지 않고 목록만 확인)
  */
-export async function GET(request: Request) {
+export async function GET(_request: Request) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });

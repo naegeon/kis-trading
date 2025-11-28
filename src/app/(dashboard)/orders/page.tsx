@@ -79,7 +79,7 @@ export default function OrdersPage() {
           variant: 'destructive',
         });
       }
-    } catch (error) {
+    } catch {
       toast({
         title: '정리 실패',
         description: '서버와 통신 중 오류가 발생했습니다.',
