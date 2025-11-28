@@ -1,7 +1,7 @@
 
 import { auth } from '@/auth';
 import { db } from '@/lib/db/client';
-import { strategies, strategyStatusEnum, credentials } from '@/lib/db/schema';
+import { strategies, strategyStatusEnum, credentials, orders } from '@/lib/db/schema';
 import { and, eq } from 'drizzle-orm';
 import { api } from '@/lib/api';
 import { z } from 'zod';
@@ -132,40 +132,94 @@ export async function PATCH(request: Request, { params }: { params: { id: string
   }
 
   try {
+    // 먼저 기존 전략 조회 (미체결 주문 취소용)
+    const [existingStrategy] = await db
+      .select()
+      .from(strategies)
+      .where(and(eq(strategies.id, strategyId), eq(strategies.userId, session.user.id)));
+
+    if (!existingStrategy) {
+      return api.error('Strategy not found or you do not have permission', 404);
+    }
+
     const [updatedStrategy] = await db
       .update(strategies)
       .set({ status, updatedAt: new Date() })
       .where(and(eq(strategies.id, strategyId), eq(strategies.userId, session.user.id)))
       .returning();
 
-    if (!updatedStrategy) {
-      return api.error('Strategy not found or you do not have permission', 404);
+    // 사용자 API 자격증명 조회
+    const userCredentials = await db.query.credentials.findFirst({
+      where: eq(credentials.userId, session.user.id),
+    });
+
+    // 전략 비활성화 시 (INACTIVE 또는 ENDED) 미체결 주문 취소
+    if ((status === 'INACTIVE' || status === 'ENDED') && userCredentials) {
+      const decryptedCreds = getDecryptedCredentials(userCredentials);
+      const kisClient = new KISClient({
+        appkey: decryptedCreds.appKey,
+        appsecret: decryptedCreds.appSecret,
+        isMock: decryptedCreds.isMock,
+        accountNumber: decryptedCreds.accountNumber,
+        credentialsId: decryptedCreds.credentialsId,
+      });
+
+      // DB에서 미체결 주문 조회
+      const pendingOrders = await db.query.orders.findMany({
+        where: and(
+          eq(orders.strategyId, strategyId),
+          eq(orders.status, 'SUBMITTED')
+        ),
+      });
+
+      // KIS API로 미체결 주문 취소
+      const params = existingStrategy.parameters as LooLocStrategyParams;
+      for (const order of pendingOrders) {
+        if (!order.kisOrderId) continue;
+
+        try {
+          await kisClient.cancelOrder({
+            kisOrderId: order.kisOrderId,
+            symbol: existingStrategy.symbol,
+            quantity: order.quantity,
+            market: existingStrategy.market,
+            exchangeCode: params?.exchangeCode || 'NASD',
+          });
+
+          // DB 상태 업데이트
+          await db.update(orders)
+            .set({ status: 'CANCELLED' })
+            .where(eq(orders.id, order.id));
+        } catch (cancelError) {
+          console.error(`Failed to cancel order ${order.kisOrderId}:`, cancelError);
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        data: updatedStrategy,
+        cancelledOrders: pendingOrders.length,
+      }, { status: 200 });
     }
 
     // 전략 상태를 ACTIVE로 변경 시 즉시 실행
-    if (status === 'ACTIVE') {
-      const userCredentials = await db.query.credentials.findFirst({
-        where: eq(credentials.userId, session.user.id),
+    if (status === 'ACTIVE' && userCredentials) {
+      const decryptedCreds = getDecryptedCredentials(userCredentials);
+      const kisClient = new KISClient({
+        appkey: decryptedCreds.appKey,
+        appsecret: decryptedCreds.appSecret,
+        isMock: decryptedCreds.isMock,
+        accountNumber: decryptedCreds.accountNumber,
+        credentialsId: decryptedCreds.credentialsId,
       });
 
-      if (userCredentials) {
-        const decryptedCreds = getDecryptedCredentials(userCredentials);
-        const kisClient = new KISClient({
-          appkey: decryptedCreds.appKey,
-          appsecret: decryptedCreds.appSecret,
-          isMock: decryptedCreds.isMock,
-          accountNumber: decryptedCreds.accountNumber,
-          credentialsId: decryptedCreds.credentialsId,
-        });
+      const executionResult = await executeStrategyImmediately(updatedStrategy, kisClient);
 
-        const executionResult = await executeStrategyImmediately(updatedStrategy, kisClient);
-
-        return NextResponse.json({
-          success: true,
-          data: updatedStrategy,
-          execution: executionResult,
-        }, { status: 200 });
-      }
+      return NextResponse.json({
+        success: true,
+        data: updatedStrategy,
+        execution: executionResult,
+      }, { status: 200 });
     }
 
     return api.success(updatedStrategy);
@@ -184,14 +238,69 @@ export async function DELETE(request: Request, { params }: { params: { id: strin
   const strategyId = params.id;
 
   try {
-    const [deletedStrategy] = await db
-      .delete(strategies)
-      .where(and(eq(strategies.id, strategyId), eq(strategies.userId, session.user.id)))
-      .returning();
+    // 1. 전략 조회 (삭제 전에 정보 필요)
+    const [strategy] = await db
+      .select()
+      .from(strategies)
+      .where(and(eq(strategies.id, strategyId), eq(strategies.userId, session.user.id)));
 
-    if (!deletedStrategy) {
+    if (!strategy) {
       return api.error('Strategy not found or you do not have permission', 404);
     }
+
+    // 2. 사용자 API 자격증명 조회
+    const userCredentials = await db.query.credentials.findFirst({
+      where: eq(credentials.userId, session.user.id),
+    });
+
+    // 3. 미체결 주문 취소 (KIS API)
+    if (userCredentials) {
+      const decryptedCreds = getDecryptedCredentials(userCredentials);
+      const kisClient = new KISClient({
+        appkey: decryptedCreds.appKey,
+        appsecret: decryptedCreds.appSecret,
+        isMock: decryptedCreds.isMock,
+        accountNumber: decryptedCreds.accountNumber,
+        credentialsId: decryptedCreds.credentialsId,
+      });
+
+      // DB에서 미체결 주문 조회
+      const pendingOrders = await db.query.orders.findMany({
+        where: and(
+          eq(orders.strategyId, strategyId),
+          eq(orders.status, 'SUBMITTED')
+        ),
+      });
+
+      // KIS API로 미체결 주문 취소
+      const params = strategy.parameters as LooLocStrategyParams;
+      for (const order of pendingOrders) {
+        if (!order.kisOrderId) continue;
+
+        try {
+          await kisClient.cancelOrder({
+            kisOrderId: order.kisOrderId,
+            symbol: strategy.symbol,
+            quantity: order.quantity,
+            market: strategy.market,
+            exchangeCode: params?.exchangeCode || 'NASD',
+          });
+
+          // DB 상태 업데이트
+          await db.update(orders)
+            .set({ status: 'CANCELLED' })
+            .where(eq(orders.id, order.id));
+        } catch (cancelError) {
+          console.error(`Failed to cancel order ${order.kisOrderId}:`, cancelError);
+          // 취소 실패해도 전략 삭제는 계속 진행
+        }
+      }
+    }
+
+    // 4. 전략 삭제
+    await db
+      .delete(strategies)
+      .where(and(eq(strategies.id, strategyId), eq(strategies.userId, session.user.id)));
 
     return api.success({ message: 'Strategy deleted successfully' });
   } catch (error) {

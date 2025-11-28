@@ -12,8 +12,9 @@ import { PageContainer } from '@/components/layout/PageContainer';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { ContentCard } from '@/components/layout/ContentCard';
 import { OrderMobileList } from '@/components/orders/OrderMobileCard';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, Trash2 } from 'lucide-react';
 import type { Order, OrderStatus } from '@/types/order';
+import { useToast } from '@/hooks/use-toast';
 
 export default function OrdersPage() {
   const {
@@ -33,6 +34,9 @@ export default function OrdersPage() {
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isCleaningUp, setIsCleaningUp] = useState(false);
+
+  const { toast } = useToast();
 
   const handleRowClick = (order: Order) => {
     setSelectedOrder(order);
@@ -54,6 +58,38 @@ export default function OrdersPage() {
     setIsRefreshing(false);
   };
 
+  const handleCleanupOrphans = async () => {
+    setIsCleaningUp(true);
+    try {
+      const response = await fetch('/api/orders/cleanup', {
+        method: 'POST',
+      });
+      const data = await response.json();
+
+      if (data.success) {
+        toast({
+          title: '고아 주문 정리 완료',
+          description: `${data.cancelledCount}건 취소됨${data.failedCount > 0 ? `, ${data.failedCount}건 실패` : ''}`,
+        });
+        refreshOrders();
+      } else {
+        toast({
+          title: '정리 실패',
+          description: data.error || '알 수 없는 오류가 발생했습니다.',
+          variant: 'destructive',
+        });
+      }
+    } catch (error) {
+      toast({
+        title: '정리 실패',
+        description: '서버와 통신 중 오류가 발생했습니다.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsCleaningUp(false);
+    }
+  };
+
   // 카드 클릭 시 상태 필터링
   const handleFilterByStatus = (statuses: OrderStatus[]) => {
     handleFilterChange({ ...filters, statuses });
@@ -69,15 +105,26 @@ export default function OrdersPage() {
           { label: '주문 내역' },
         ]}
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-          >
-            <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
-            새로고침
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleCleanupOrphans}
+              disabled={isCleaningUp}
+            >
+              <Trash2 className="h-4 w-4 mr-2" />
+              {isCleaningUp ? '정리 중...' : '고아 주문 정리'}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
+              새로고침
+            </Button>
+          </div>
         }
       />
 
