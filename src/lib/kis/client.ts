@@ -779,7 +779,7 @@ export class KISClient {
 
   async getAccountHoldings(): Promise<KISHolding[]> {
     const path = '/uapi/overseas-stock/v1/trading/inquire-balance';
-    const trId = 'JTTT3012R'; // 해외주식 잔고조회
+    const trId = this.config.isMock ? 'VTTS3012R' : 'TTTS3012R'; // 해외주식 잔고조회
 
     const [accNo, accCode] = this.parseAccountNumber();
 
@@ -859,9 +859,9 @@ export class KISClient {
     const [accNo, accCode] = this.parseAccountNumber();
 
     if (market === 'US') {
-      // 미국 시장 주문 조회 (해외주식 체결내역조회)
+      // 미국 시장 주문 조회 (해외주식 주문체결내역)
       const path = '/uapi/overseas-stock/v1/trading/inquire-ccnl';
-      const trId = this.config.isMock ? 'VTTT3001R' : 'JTTT3001R';
+      const trId = this.config.isMock ? 'VTTS3035R' : 'TTTS3035R';
 
       // 날짜 파라미터 생성 (최근 7일간 조회)
       const today = new Date();
