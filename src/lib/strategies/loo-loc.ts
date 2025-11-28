@@ -104,23 +104,59 @@ export async function executeLooLocStrategy(
     }
   }
 
-  // LOO/LOC 주문이 이미 있는지 확인 (SUBMITTED 또는 체결된 주문 포함)
-  // ✅ SUBMITTED도 포함하여 중복 주문 방지
-  const hasLOOOrder = todayOrders.some(o =>
-    o.orderType === 'LOO' &&
-    o.side === 'BUY' &&
-    (o.status === 'SUBMITTED' || o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
+  // ✅ KIS API에서 실제 미체결 주문 조회 (DB 상태와 무관하게 중복 방지)
+  const kisUnfilledOrders = await kisClient.getOverseasUnfilledOrders(
+    strategy.symbol,
+    params.exchangeCode || 'NASD'
   );
-  const hasLOCBuyOrder = todayOrders.some(o =>
-    o.orderType === 'LOC' &&
-    o.side === 'BUY' &&
-    (o.status === 'SUBMITTED' || o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
+  await log('INFO', `KIS 미체결 조회 완료: ${strategy.symbol} - ${kisUnfilledOrders.length}건`, {
+    orders: kisUnfilledOrders.map(o => ({ orderId: o.orderId, type: o.orderType, side: o.side, qty: o.unfilledQuantity }))
+  }, strategy.userId, strategy.id);
+
+  // KIS 실제 미체결 주문 기준으로 중복 체크
+  const kisHasLOOOrder = kisUnfilledOrders.some(o => o.orderType === 'LOO' && o.side === 'BUY');
+  const kisHasLOCBuyOrder = kisUnfilledOrders.some(o => o.orderType === 'LOC' && o.side === 'BUY');
+  const kisHasLOCSellOrder = kisUnfilledOrders.some(o => o.orderType === 'LOC' && o.side === 'SELL');
+
+  // DB 기준 체결된 주문 확인 (FILLED/PARTIALLY_FILLED는 KIS에 없으므로 DB에서 체크)
+  const dbHasFilledLOOOrder = todayOrders.some(o =>
+    o.orderType === 'LOO' && o.side === 'BUY' &&
+    (o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
   );
-  const hasLOCSellOrder = todayOrders.some(o =>
-    o.orderType === 'LOC' &&
-    o.side === 'SELL' &&
-    (o.status === 'SUBMITTED' || o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
+  const dbHasFilledLOCBuyOrder = todayOrders.some(o =>
+    o.orderType === 'LOC' && o.side === 'BUY' &&
+    (o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
   );
+  const dbHasFilledLOCSellOrder = todayOrders.some(o =>
+    o.orderType === 'LOC' && o.side === 'SELL' &&
+    (o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
+  );
+
+  // 최종 판단: KIS 미체결 또는 DB 체결이 있으면 해당 주문 스킵
+  const hasLOOOrder = kisHasLOOOrder || dbHasFilledLOOOrder;
+  const hasLOCBuyOrder = kisHasLOCBuyOrder || dbHasFilledLOCBuyOrder;
+  const hasLOCSellOrder = kisHasLOCSellOrder || dbHasFilledLOCSellOrder;
+
+  // DB와 KIS 상태 불일치 경고 (DB는 CANCELLED인데 KIS에 미체결 있는 경우)
+  if (kisUnfilledOrders.length > 0) {
+    const dbCancelledButKisActive = todayOrders.filter(dbOrder =>
+      dbOrder.status === 'CANCELLED' &&
+      kisUnfilledOrders.some(kisOrder => kisOrder.orderId === dbOrder.kisOrderId)
+    );
+    if (dbCancelledButKisActive.length > 0) {
+      await log('WARN', `DB-KIS 상태 불일치 감지: DB에서 취소로 표시되었지만 KIS에 미체결 ${dbCancelledButKisActive.length}건 존재`, {
+        dbCancelled: dbCancelledButKisActive.map(o => o.kisOrderId),
+      }, strategy.userId, strategy.id);
+
+      // DB 상태를 KIS 실제 상태로 복구
+      for (const dbOrder of dbCancelledButKisActive) {
+        await db.update(ordersSchema)
+          .set({ status: 'SUBMITTED' })
+          .where(eq(ordersSchema.id, dbOrder.id));
+        await log('INFO', `DB 상태 복구: ${dbOrder.kisOrderId} CANCELLED -> SUBMITTED`, {}, strategy.userId, strategy.id);
+      }
+    }
+  }
 
   // 3. KIS API를 통해 현재가 및 전일 종가 조회 (해외 주식용 API 사용)
   // 거래소 코드 변환: NASD -> NAS, NYSE -> NYS, AMEX -> AMS

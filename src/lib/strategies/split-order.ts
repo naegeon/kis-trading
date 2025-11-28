@@ -118,11 +118,11 @@ export async function executeSplitOrderStrategy(
   kisClient: KISClient
 ): Promise<Order[]> {
   const params = strategy.parameters as SplitOrderParams;
+  const today = new Date();
 
   // 0. 전략 생성 날짜 확인 (당일만 유효)
   if (strategy.createdAt) {
     const strategyCreatedDate = new Date(strategy.createdAt);
-    const today = new Date();
 
     // 날짜만 비교 (시간 제외)
     const isSameDay =
@@ -153,6 +153,72 @@ export async function executeSplitOrderStrategy(
   }
 
   await log('INFO', `[Split-Order] Starting execution for ${strategy.name}. Current position: ${params.currentQty || 0} shares at ${params.currentAvgCost || 0}`, {}, strategy.userId, strategy.id);
+
+  // 0-1. 당일 매수 주문 조회 (중복 방지 및 전략 수정 처리용)
+  const existingBuyOrders = await db.query.orders.findMany({
+    where: and(
+      eq(ordersSchema.strategyId, strategy.id),
+      eq(ordersSchema.side, 'BUY')
+    ),
+  });
+
+  // 당일 주문만 필터링
+  const todayBuyOrders = existingBuyOrders.filter(order => {
+    if (!order.submittedAt) return false;
+    const orderDate = new Date(order.submittedAt);
+    return orderDate.getDate() === today.getDate() &&
+           orderDate.getMonth() === today.getMonth() &&
+           orderDate.getFullYear() === today.getFullYear();
+  });
+
+  // 당일 SUBMITTED 상태인 매수 주문
+  const pendingBuyOrders = todayBuyOrders.filter(o => o.status === 'SUBMITTED');
+
+  // 0-2. 전략 수정 여부 확인 (strategy.updatedAt vs order.submittedAt)
+  const strategyUpdatedAt = strategy.updatedAt ? new Date(strategy.updatedAt) : new Date(0);
+  const strategyModifiedAfterOrder = pendingBuyOrders.some(order =>
+    order.submittedAt && strategyUpdatedAt > new Date(order.submittedAt)
+  );
+
+  // 전략이 수정되었으면 기존 미체결 매수 주문 취소
+  if (strategyModifiedAfterOrder && pendingBuyOrders.length > 0) {
+    await log('INFO', `[Split-Order] 전략 수정 감지. 기존 미체결 매수 주문 ${pendingBuyOrders.length}건 취소`, {}, strategy.userId, strategy.id);
+
+    for (const order of pendingBuyOrders) {
+      try {
+        if (!order.kisOrderId) continue;
+
+        await kisClient.cancelOrder({
+          kisOrderId: order.kisOrderId,
+          symbol: strategy.symbol,
+          quantity: order.quantity,
+          market: strategy.market,
+          exchangeCode: params.exchangeCode,
+        });
+
+        await db.update(ordersSchema)
+          .set({ status: 'CANCELLED' })
+          .where(eq(ordersSchema.id, order.id));
+
+        await log('INFO', `[Split-Order] 매수 주문 취소됨: ${order.kisOrderId}`, {}, strategy.userId, strategy.id);
+      } catch (cancelError) {
+        await log('WARN', `[Split-Order] 매수 주문 취소 실패: ${order.kisOrderId}`, { error: cancelError }, strategy.userId, strategy.id);
+      }
+    }
+  }
+
+  // 0-3. 당일 매수 주문 존재 여부 확인 (SUBMITTED 또는 FILLED/PARTIALLY_FILLED)
+  // 전략 수정 후 취소된 경우는 제외하고 다시 체크
+  const currentPendingBuyOrders = strategyModifiedAfterOrder
+    ? [] // 방금 취소했으므로 없음
+    : pendingBuyOrders;
+
+  const hasSubmittedOrFilledBuyOrders = todayBuyOrders.some(o =>
+    o.status === 'SUBMITTED' || o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED'
+  );
+
+  // 전략이 수정되지 않았고, 당일 매수 주문(제출 또는 체결)이 있으면 새 매수 주문 스킵
+  const shouldSkipBuyOrders = !strategyModifiedAfterOrder && hasSubmittedOrFilledBuyOrders;
 
   // 1. 최근 체결된 주문 확인 및 평단가 재계산
   // 중요: 이미 처리된 주문은 다시 계산하지 않기 위해 processedOrderIds를 사용
@@ -377,117 +443,122 @@ export async function executeSplitOrderStrategy(
     return submittedOrders;
   }
 
-  await log('INFO', `[Split-Order] Preparing to submit buy orders. Distribution: ${params.distributionType}, Count: ${params.splitCount}`, {}, strategy.userId, strategy.id);
+  // 3. 당일 매수 주문이 없거나 전략 수정으로 취소된 경우에만 새 매수 주문 제출
+  if (shouldSkipBuyOrders) {
+    await log('INFO', `[Split-Order] 당일 매수 주문이 이미 존재함. 중복 방지를 위해 새 매수 주문 스킵. (SUBMITTED: ${currentPendingBuyOrders.length}, 체결 포함 총: ${todayBuyOrders.filter(o => o.status !== 'CANCELLED').length})`, {}, strategy.userId, strategy.id);
+  } else {
+    await log('INFO', `[Split-Order] Preparing to submit buy orders. Distribution: ${params.distributionType}, Count: ${params.splitCount}`, {}, strategy.userId, strategy.id);
 
-  // 3. 분할 매수 주문 수량 분배
-  let quantities: number[];
-  switch (params.distributionType) {
-    case 'PYRAMID':
-      quantities = calculatePyramidDistribution(params.totalAmount, params.splitCount);
-      break;
-    case 'INVERTED':
-      quantities = calculateInvertedDistribution(params.totalAmount, params.splitCount);
-      break;
-    case 'EQUAL':
-    default:
-      quantities = calculateEqualDistribution(params.totalAmount, params.splitCount);
-      break;
-  }
-
-  // 4. 분할 매수 주문 가격 계산
-  const prices = calculateSplitPrices(
-    params.basePrice,
-    params.declineValue,
-    params.declineUnit,
-    params.splitCount,
-    params.side
-  );
-
-  // 5. 분할 매수 주문 생성 및 제출
-  for (let i = 0; i < params.splitCount; i++) {
-    const quantity = quantities[i];
-    const price = prices[i];
-
-    if (quantity <= 0) continue;
-
-    try {
-      // 주간매매 플래그 확인하여 적절한 API 호출
-      const orderResult = params.isDaytime
-        ? await kisClient.submitDaytimeOrder({
-            symbol: strategy.symbol,
-            side: params.side,
-            orderType: 'LIMIT', // 주간매매는 지정가만 가능
-            quantity,
-            price,
-            market: strategy.market, // US만 가능
-            exchangeCode: params.exchangeCode, // 거래소 코드 (NASD/NYSE/AMEX)
-          })
-        : await kisClient.submitOrder({
-            symbol: strategy.symbol,
-            side: params.side,
-            orderType: 'LIMIT', // 분할 주문은 지정가
-            quantity,
-            price,
-            market: strategy.market, // 시장 구분 (US/KR)
-            exchangeCode: params.exchangeCode, // 거래소 코드 (NASD/NYSE/AMEX)
-          });
-
-      const newOrder: NewOrder = {
-        strategyId: strategy.id,
-        userId: strategy.userId,
-        kisOrderId: orderResult.orderId,
-        symbol: strategy.symbol,
-        side: params.side,
-        orderType: 'LIMIT',
-        quantity,
-        price: price.toString(),
-        status: 'SUBMITTED',
-        submittedAt: new Date(),
-      };
-
-      await db.insert(ordersSchema).values(newOrder);
-      submittedOrders.push(newOrder as Order); // Cast to Order for consistency
-
-      // Send push notification for successful order submission
-      await sendPushNotification(
-        strategy.userId,
-        '주문 제출 성공',
-        `${strategy.name} 전략: ${strategy.symbol} ${params.side === 'BUY' ? '매수' : '매도'} ${quantity}주 (${price} USD) 주문이 제출되었습니다.`,
-        `/orders` // Link to orders page
-      );
-
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류';
-
-      // 주간매매 관련 에러인지 확인
-      let notificationTitle = '주문 제출 실패';
-      let notificationMessage = `${strategy.name} 전략: ${strategy.symbol} ${params.side === 'BUY' ? '매수' : '매도'} ${quantity}주 (${price} USD) 주문 제출에 실패했습니다.`;
-
-      if (params.isDaytime) {
-        // 주간매매 특정 에러 메시지 체크
-        if (errorMessage.includes('모의투자') || errorMessage.includes('미지원')) {
-          notificationTitle = '주간매매 불가';
-          notificationMessage = `${strategy.name} 전략: 주간매매는 모의투자를 지원하지 않습니다. 실거래 계좌로 전환해주세요.`;
-        } else if (errorMessage.includes('종목') || errorMessage.includes('거래불가')) {
-          notificationTitle = '주간매매 불가 종목';
-          notificationMessage = `${strategy.name} 전략: ${strategy.symbol}은(는) 주간매매가 지원되지 않는 종목입니다. 다른 종목을 선택하거나 정규장 전략으로 변경해주세요.`;
-        } else {
-          notificationMessage += ` (주간매매 시간: 한국시간 10:00~18:00) 오류: ${errorMessage}`;
-        }
-      } else {
-        notificationMessage += ` 오류: ${errorMessage}`;
-      }
-
-      await sendPushNotification(
-        strategy.userId,
-        notificationTitle,
-        notificationMessage,
-        `/orders` // Link to orders page
-      );
-
-      await log('ERROR', `[Split-Order] Failed to submit buy order ${i+1}/${params.splitCount}: ${errorMessage}`, { error: errorMessage, price, quantity }, strategy.userId, strategy.id);
+    // 3-1. 분할 매수 주문 수량 분배
+    let quantities: number[];
+    switch (params.distributionType) {
+      case 'PYRAMID':
+        quantities = calculatePyramidDistribution(params.totalAmount, params.splitCount);
+        break;
+      case 'INVERTED':
+        quantities = calculateInvertedDistribution(params.totalAmount, params.splitCount);
+        break;
+      case 'EQUAL':
+      default:
+        quantities = calculateEqualDistribution(params.totalAmount, params.splitCount);
+        break;
     }
-  }
+
+    // 3-2. 분할 매수 주문 가격 계산
+    const prices = calculateSplitPrices(
+      params.basePrice,
+      params.declineValue,
+      params.declineUnit,
+      params.splitCount,
+      params.side
+    );
+
+    // 3-3. 분할 매수 주문 생성 및 제출
+    for (let i = 0; i < params.splitCount; i++) {
+      const quantity = quantities[i];
+      const price = prices[i];
+
+      if (quantity <= 0) continue;
+
+      try {
+        // 주간매매 플래그 확인하여 적절한 API 호출
+        const orderResult = params.isDaytime
+          ? await kisClient.submitDaytimeOrder({
+              symbol: strategy.symbol,
+              side: params.side,
+              orderType: 'LIMIT', // 주간매매는 지정가만 가능
+              quantity,
+              price,
+              market: strategy.market, // US만 가능
+              exchangeCode: params.exchangeCode, // 거래소 코드 (NASD/NYSE/AMEX)
+            })
+          : await kisClient.submitOrder({
+              symbol: strategy.symbol,
+              side: params.side,
+              orderType: 'LIMIT', // 분할 주문은 지정가
+              quantity,
+              price,
+              market: strategy.market, // 시장 구분 (US/KR)
+              exchangeCode: params.exchangeCode, // 거래소 코드 (NASD/NYSE/AMEX)
+            });
+
+        const newOrder: NewOrder = {
+          strategyId: strategy.id,
+          userId: strategy.userId,
+          kisOrderId: orderResult.orderId,
+          symbol: strategy.symbol,
+          side: params.side,
+          orderType: 'LIMIT',
+          quantity,
+          price: price.toString(),
+          status: 'SUBMITTED',
+          submittedAt: new Date(),
+        };
+
+        await db.insert(ordersSchema).values(newOrder);
+        submittedOrders.push(newOrder as Order); // Cast to Order for consistency
+
+        // Send push notification for successful order submission
+        await sendPushNotification(
+          strategy.userId,
+          '주문 제출 성공',
+          `${strategy.name} 전략: ${strategy.symbol} ${params.side === 'BUY' ? '매수' : '매도'} ${quantity}주 (${price} USD) 주문이 제출되었습니다.`,
+          `/orders` // Link to orders page
+        );
+
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류';
+
+        // 주간매매 관련 에러인지 확인
+        let notificationTitle = '주문 제출 실패';
+        let notificationMessage = `${strategy.name} 전략: ${strategy.symbol} ${params.side === 'BUY' ? '매수' : '매도'} ${quantity}주 (${price} USD) 주문 제출에 실패했습니다.`;
+
+        if (params.isDaytime) {
+          // 주간매매 특정 에러 메시지 체크
+          if (errorMessage.includes('모의투자') || errorMessage.includes('미지원')) {
+            notificationTitle = '주간매매 불가';
+            notificationMessage = `${strategy.name} 전략: 주간매매는 모의투자를 지원하지 않습니다. 실거래 계좌로 전환해주세요.`;
+          } else if (errorMessage.includes('종목') || errorMessage.includes('거래불가')) {
+            notificationTitle = '주간매매 불가 종목';
+            notificationMessage = `${strategy.name} 전략: ${strategy.symbol}은(는) 주간매매가 지원되지 않는 종목입니다. 다른 종목을 선택하거나 정규장 전략으로 변경해주세요.`;
+          } else {
+            notificationMessage += ` (주간매매 시간: 한국시간 10:00~18:00) 오류: ${errorMessage}`;
+          }
+        } else {
+          notificationMessage += ` 오류: ${errorMessage}`;
+        }
+
+        await sendPushNotification(
+          strategy.userId,
+          notificationTitle,
+          notificationMessage,
+          `/orders` // Link to orders page
+        );
+
+        await log('ERROR', `[Split-Order] Failed to submit buy order ${i+1}/${params.splitCount}: ${errorMessage}`, { error: errorMessage, price, quantity }, strategy.userId, strategy.id);
+      }
+    }
+  } // end of else block (shouldSkipBuyOrders === false)
 
   await log('INFO', `[Split-Order] Execution completed. Total orders submitted: ${submittedOrders.length}`, {}, strategy.userId, strategy.id);
 

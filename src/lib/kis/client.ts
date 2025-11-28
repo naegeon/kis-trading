@@ -50,12 +50,16 @@ const TR_CODES = {
   OVERSEAS_DAYTIME_SELL: 'TTTS6037U', // 해외 주식 주간매도 (실거래)
   OVERSEAS_DAYTIME_CANCEL: 'TTTS6038U', // 해외 주식 주간정정취소 (실거래)
 
+  // 미체결 조회 (실거래만 지원, 모의투자 미지원)
+  OVERSEAS_UNFILLED: 'TTTS3018R', // 해외 주식 미체결 조회 (실거래)
+
   // 모의투자
   OVERSEAS_ORDER_BUY_MOCK: 'VTTT1002U', // 해외 주식 매수 (모의투자)
   OVERSEAS_ORDER_SELL_MOCK: 'VTTT1001U', // 해외 주식 매도 (모의투자)
   OVERSEAS_ORDER_CANCEL_MOCK: 'VTTT1006U', // 해외 주식 정정취소 (모의투자)
   OVERSEAS_BALANCE_MOCK: 'VTTS3012R', // 해외 주식 잔고 조회 (모의투자)
   OVERSEAS_MARGIN_MOCK: 'VTTC2101R', // 해외 증거금 통화별 조회 (모의투자)
+  // 해외 주식 미체결 조회: 모의투자 미지원
   // 주간매매는 모의투자 미지원
 
   // === 공통 ===
@@ -1090,8 +1094,99 @@ export class KISClient {
     return prices;
   }
 
+  /**
+   * 해외 주식 미체결 주문 조회 (특정 종목)
+   * @param symbol 종목코드 (예: AAPL, TSLA)
+   * @param exchangeCode 거래소 코드 (NASD, NYSE, AMEX)
+   * @returns 미체결 주문 목록
+   */
+  async getOverseasUnfilledOrders(symbol?: string, exchangeCode: 'NASD' | 'NYSE' | 'AMEX' = 'NASD'): Promise<{
+    orderId: string;
+    symbol: string;
+    side: 'BUY' | 'SELL';
+    orderType: string;
+    quantity: number;
+    price: number;
+    unfilledQuantity: number;
+    orderTime: string;
+  }[]> {
+    // 모의투자는 미체결 조회 API 미지원
+    if (this.config.isMock) {
+      console.log('[KISClient] getOverseasUnfilledOrders: 모의투자는 미지원, 빈 배열 반환');
+      return [];
+    }
+
+    const [accNo, accCode] = this.parseAccountNumber();
+    const trId = TR_CODES.OVERSEAS_UNFILLED;
+    const path = '/uapi/overseas-stock/v1/trading/inquire-nccs';
+
+    const params: Record<string, string> = {
+      CANO: accNo,
+      ACNT_PRDT_CD: accCode,
+      OVRS_EXCG_CD: exchangeCode,
+      SORT_SQN: 'DS', // 정렬순서 (DS: 정순)
+      CTX_AREA_FK200: '', // 연속조회검색조건
+      CTX_AREA_NK200: '', // 연속조회키
+    };
+
+    try {
+      const response = await this._request('GET', path, trId, {}, params) as {
+        output: Array<{
+          ODNO: string;           // 주문번호
+          PDNO: string;           // 종목코드
+          OVRS_EXCG_CD: string;   // 거래소코드
+          SLL_BUY_DVSN_CD: string; // 매도매수구분 (01: 매도, 02: 매수)
+          ORD_DVSN_CD: string;    // 주문구분 (00: 지정가, 32: LOO, 34: LOC 등)
+          ORD_QTY: string;        // 주문수량
+          OVRS_ORD_UNPR: string;  // 주문단가
+          NCCS_QTY: string;       // 미체결수량
+          ORD_TMD: string;        // 주문시간
+          PRCS_STAT_NAME: string; // 처리상태명
+        }>;
+      };
+
+      if (!response.output || response.output.length === 0) {
+        return [];
+      }
+
+      // 특정 종목 필터링 (symbol이 제공된 경우)
+      let orders = response.output;
+      if (symbol) {
+        orders = orders.filter(o => o.PDNO.toUpperCase() === symbol.toUpperCase());
+      }
+
+      return orders.map(o => ({
+        orderId: o.ODNO,
+        symbol: o.PDNO,
+        side: o.SLL_BUY_DVSN_CD === '02' ? 'BUY' : 'SELL' as 'BUY' | 'SELL',
+        orderType: this.parseOrderTypeCode(o.ORD_DVSN_CD),
+        quantity: parseInt(o.ORD_QTY, 10),
+        price: parseFloat(o.OVRS_ORD_UNPR),
+        unfilledQuantity: parseInt(o.NCCS_QTY, 10),
+        orderTime: o.ORD_TMD,
+      }));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error(`[KISClient] getOverseasUnfilledOrders failed: ${errorMessage}`);
+      return [];
+    }
+  }
+
+  /**
+   * 주문구분코드를 읽기 쉬운 형태로 변환
+   */
+  private parseOrderTypeCode(code: string): string {
+    const types: Record<string, string> = {
+      '00': 'LIMIT',
+      '01': 'MARKET',
+      '32': 'LOO',
+      '34': 'LOC',
+    };
+    return types[code] || code;
+  }
+
   async getPendingOrders(): Promise<Order[]> {
-    // TODO: 미체결 주문 조회 로직 구현
+    // 기존 호환성을 위해 유지 (사용하지 않음)
     return Promise.resolve([]);
   }
 
