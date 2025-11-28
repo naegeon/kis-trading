@@ -1155,19 +1155,21 @@ export class KISClient {
       // 특정 종목 필터링 (symbol이 제공된 경우)
       let orders = response.output;
       if (symbol) {
-        orders = orders.filter(o => o.pdno.toUpperCase() === symbol.toUpperCase());
+        orders = orders.filter(o => o.pdno && o.pdno.toUpperCase() === symbol.toUpperCase());
       }
 
-      return orders.map(o => ({
-        orderId: o.odno,
-        symbol: o.pdno,
-        side: o.sll_buy_dvsn_cd === '02' ? 'BUY' : 'SELL' as 'BUY' | 'SELL',
-        orderType: this.parseOrderTypeFromName(o.sll_buy_dvsn_cd_name || '', o.ord_dvsn_cd),
-        quantity: parseInt(o.ft_ord_qty, 10),
-        price: parseFloat(o.ft_ord_unpr3),
-        unfilledQuantity: parseInt(o.nccs_qty, 10),
-        orderTime: o.ord_tmd,
-      }));
+      return orders
+        .filter(o => o.odno && o.pdno) // 필수 필드가 있는 주문만
+        .map(o => ({
+          orderId: o.odno,
+          symbol: o.pdno,
+          side: o.sll_buy_dvsn_cd === '02' ? 'BUY' : 'SELL' as 'BUY' | 'SELL',
+          orderType: this.parseOrderTypeFromName(o.sll_buy_dvsn_cd_name || '', o.ord_dvsn_cd),
+          quantity: parseInt(o.ft_ord_qty || '0', 10),
+          price: parseFloat(o.ft_ord_unpr3 || '0'),
+          unfilledQuantity: parseInt(o.nccs_qty || '0', 10),
+          orderTime: o.ord_tmd || '',
+        }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       console.error(`[KISClient] getOverseasUnfilledOrders failed: ${errorMessage}`);
