@@ -580,7 +580,7 @@ export class KISClient {
    * 해외 증거금 통화별 조회
    * @returns 예수금 및 매수가능금액 정보
    */
-  private async getOverseasDeposit(): Promise<{ deposit: number; buyableCash: number }> {
+  async getOverseasDeposit(): Promise<{ deposit: number; buyableCash: number }> {
     // 모의투자는 해외 증거금 조회 미지원
     if (this.config.isMock) {
       console.warn('[KIS API] 해외 증거금 조회는 모의투자를 지원하지 않습니다. 기본값 반환.');
@@ -783,30 +783,48 @@ export class KISClient {
 
     const [accNo, accCode] = this.parseAccountNumber();
 
-    const params = {
-      CANO: accNo,
-      ACNT_PRDT_CD: accCode,
-      OVRS_EXCG_CD: 'NASD', // TODO: This should be dynamic based on the stocks being traded
-      TR_CRCY_CD: 'USD',
-      CTX_AREA_FK200: '',
-      CTX_AREA_NK200: '',
-    };
+    // 미국 주식 거래소 목록 (NASD, NYSE, AMEX 모두 조회)
+    const usExchanges = ['NASD', 'NYSE', 'AMEX'];
+    const allHoldings: KISHolding[] = [];
 
-    const response = await this._request('GET', path, trId, {}, params) as KISOverasBalanceResponse;
-    
-    if (response.rt_cd !== '0' || !response.output1 || !Array.isArray(response.output1)) {
-        return [];
+    for (const exchange of usExchanges) {
+      const params = {
+        CANO: accNo,
+        ACNT_PRDT_CD: accCode,
+        OVRS_EXCG_CD: exchange,
+        TR_CRCY_CD: 'USD',
+        CTX_AREA_FK200: '',
+        CTX_AREA_NK200: '',
+      };
+
+      try {
+        const response = await this._request('GET', path, trId, {}, params) as KISOverasBalanceResponse;
+
+        if (response.rt_cd === '0' && response.output1 && Array.isArray(response.output1)) {
+          const holdings = response.output1.map(item => ({
+            symbol: item.ovrs_pdno,
+            name: item.ovrs_item_name || item.item_name || undefined,
+            quantity: parseInt(item.ovrs_cblc_qty || item.hldg_qty || '0', 10),
+            averagePrice: parseFloat(item.pchs_avg_pric || '0'),
+            currentPrice: parseFloat(item.now_pric2 || item.now_pric || '0'),
+            valuationPrice: parseFloat(item.ovrs_stck_evlu_amt || item.frcr_evlu_pfls_amt || '0'),
+            profitRate: parseFloat(item.evlu_pfls_rt || '0'),
+          }));
+          allHoldings.push(...holdings);
+        }
+      } catch (error) {
+        // 개별 거래소 조회 실패는 무시하고 계속 진행
+        // eslint-disable-next-line no-console
+        console.warn(`[getAccountHoldings] ${exchange} 거래소 조회 실패:`, error);
+      }
     }
 
-    return response.output1.map(item => ({
-        symbol: item.ovrs_pdno,
-        name: item.ovrs_item_name || item.item_name || undefined,
-        quantity: parseInt(item.ovrs_cblc_qty || item.hldg_qty || '0', 10),
-        averagePrice: parseFloat(item.pchs_avg_pric || '0'),
-        currentPrice: parseFloat(item.now_pric2 || item.now_pric || '0'),
-        valuationPrice: parseFloat(item.ovrs_stck_evlu_amt || item.frcr_evlu_pfls_amt || '0'),
-        profitRate: parseFloat(item.evlu_pfls_rt || '0'),
-    }));
+    // 중복 제거 (같은 종목이 여러 거래소에서 반환될 수 있음)
+    const uniqueHoldings = allHoldings.filter((holding, index, self) =>
+      index === self.findIndex(h => h.symbol === holding.symbol)
+    );
+
+    return uniqueHoldings;
   }
 
   /**

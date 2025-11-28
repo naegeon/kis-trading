@@ -358,7 +358,13 @@ export async function executeLooLocStrategy(
 async function getHoldings(kisClient: KISClient, symbol: string) {
   try {
     const holdings = await kisClient.getAccountHoldings();
+    // 디버깅: 전체 보유 종목 출력
+    // eslint-disable-next-line no-console
+    console.log(`[getHoldings] 전체 보유 종목 (${holdings.length}개):`, holdings.map(h => ({ symbol: h.symbol, qty: h.quantity })));
+
     const holding = holdings.find(h => h.symbol === symbol);
+    // eslint-disable-next-line no-console
+    console.log(`[getHoldings] ${symbol} 검색 결과:`, holding ? { qty: holding.quantity, avgPrice: holding.averagePrice } : 'NOT FOUND');
 
     return {
       totalQuantity: holding?.quantity || 0,
