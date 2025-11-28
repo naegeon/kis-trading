@@ -28,43 +28,39 @@ interface KISPriceResponse {
 const TR_CODES = {
   // === 국내 주식 (한국) ===
   // 실거래
-  DOMESTIC_ORDER_BUY: 'TTTC0802U', // 국내 주식 매수 (실거래)
-  DOMESTIC_ORDER_SELL: 'TTTC0801U', // 국내 주식 매도 (실거래)
-  DOMESTIC_ORDER_CANCEL: 'TTTC0803U', // 국내 주식 정정취소 (실거래)
+  DOMESTIC_ORDER_BUY: 'TTTC0012U', // 국내 주식 매수 (실거래)
+  DOMESTIC_ORDER_SELL: 'TTTC0011U', // 국내 주식 매도 (실거래)
+  DOMESTIC_ORDER_CANCEL: 'TTTC0013U', // 국내 주식 정정취소 (실거래)
   DOMESTIC_BALANCE: 'TTTC8434R', // 국내 주식 잔고 조회 (실거래)
 
   // 모의투자
-  DOMESTIC_ORDER_BUY_MOCK: 'VTTC0802U', // 국내 주식 매수 (모의투자)
-  DOMESTIC_ORDER_SELL_MOCK: 'VTTC0801U', // 국내 주식 매도 (모의투자)
-  DOMESTIC_ORDER_CANCEL_MOCK: 'VTTC0803U', // 국내 주식 정정취소 (모의투자)
+  DOMESTIC_ORDER_BUY_MOCK: 'VTTC0012U', // 국내 주식 매수 (모의투자)
+  DOMESTIC_ORDER_SELL_MOCK: 'VTTC0011U', // 국내 주식 매도 (모의투자)
+  DOMESTIC_ORDER_CANCEL_MOCK: 'VTTC0013U', // 국내 주식 정정취소 (모의투자)
   DOMESTIC_BALANCE_MOCK: 'VTTC8434R', // 국내 주식 잔고 조회 (모의투자)
 
-  // === 해외 주식 (미국 등) ===
+  // === 해외 주식 (미국) ===
   // 실거래
-  OVERSEAS_ORDER_BUY: 'TTTT1002U', // 해외 주식 매수 (실거래)
-  OVERSEAS_ORDER_SELL: 'TTTT1001U', // 해외 주식 매도 (실거래)
-  OVERSEAS_ORDER_CANCEL: 'TTTT1006U', // 해외 주식 정정취소 (실거래)
+  OVERSEAS_ORDER_BUY: 'TTTT1002U', // 미국 주식 매수 (실거래)
+  OVERSEAS_ORDER_SELL: 'TTTT1006U', // 미국 주식 매도 (실거래)
+  OVERSEAS_ORDER_CANCEL: 'TTTT1004U', // 미국 주식 정정취소 (실거래)
   OVERSEAS_BALANCE: 'TTTS3012R', // 해외 주식 잔고 조회 (실거래)
-  OVERSEAS_MARGIN: 'TTTC2101R', // 해외 증거금 통화별 조회 (실거래)
-  OVERSEAS_DAYTIME_BUY: 'TTTS6036U', // 해외 주식 주간매수 (실거래)
-  OVERSEAS_DAYTIME_SELL: 'TTTS6037U', // 해외 주식 주간매도 (실거래)
-  OVERSEAS_DAYTIME_CANCEL: 'TTTS6038U', // 해외 주식 주간정정취소 (실거래)
-
-  // 미체결 조회 (실거래만 지원, 모의투자 미지원)
-  OVERSEAS_UNFILLED: 'TTTS3018R', // 해외 주식 미체결 조회 (실거래)
+  OVERSEAS_MARGIN: 'TTTC2101R', // 해외 증거금 통화별 조회 (실거래, 모의투자 미지원)
+  OVERSEAS_DAYTIME_BUY: 'TTTS6036U', // 미국 주식 주간매수 (실거래, 모의투자 미지원)
+  OVERSEAS_DAYTIME_SELL: 'TTTS6037U', // 미국 주식 주간매도 (실거래, 모의투자 미지원)
+  OVERSEAS_DAYTIME_CANCEL: 'TTTS6038U', // 미국 주식 주간정정취소 (실거래, 모의투자 미지원)
+  OVERSEAS_UNFILLED: 'TTTS3018R', // 해외 주식 미체결 조회 (실거래, 모의투자 미지원)
 
   // 모의투자
-  OVERSEAS_ORDER_BUY_MOCK: 'VTTT1002U', // 해외 주식 매수 (모의투자)
-  OVERSEAS_ORDER_SELL_MOCK: 'VTTT1001U', // 해외 주식 매도 (모의투자)
-  OVERSEAS_ORDER_CANCEL_MOCK: 'VTTT1006U', // 해외 주식 정정취소 (모의투자)
+  OVERSEAS_ORDER_BUY_MOCK: 'VTTT1002U', // 미국 주식 매수 (모의투자)
+  OVERSEAS_ORDER_SELL_MOCK: 'VTTT1001U', // 미국 주식 매도 (모의투자)
+  OVERSEAS_ORDER_CANCEL_MOCK: 'VTTT1004U', // 미국 주식 정정취소 (모의투자)
   OVERSEAS_BALANCE_MOCK: 'VTTS3012R', // 해외 주식 잔고 조회 (모의투자)
-  OVERSEAS_MARGIN_MOCK: 'VTTC2101R', // 해외 증거금 통화별 조회 (모의투자)
-  // 해외 주식 미체결 조회: 모의투자 미지원
-  // 주간매매는 모의투자 미지원
+  // 해외 증거금, 미체결, 주간매매: 모의투자 미지원
 
   // === 공통 ===
-  INQUIRE_PRICE: 'FHKST01010100', // 국내 주식 현재가
-  INQUIRE_OVERSEAS_PRICE: 'HHDFS00000300', // 해외 주식 현재가
+  INQUIRE_PRICE: 'FHKST01010100', // 국내 주식 현재가 시세
+  INQUIRE_OVERSEAS_PRICE: 'HHDFS00000300', // 해외 주식 현재체결가
 };
 
 /**
@@ -585,8 +581,14 @@ export class KISClient {
    * @returns 예수금 및 매수가능금액 정보
    */
   private async getOverseasDeposit(): Promise<{ deposit: number; buyableCash: number }> {
+    // 모의투자는 해외 증거금 조회 미지원
+    if (this.config.isMock) {
+      console.warn('[KIS API] 해외 증거금 조회는 모의투자를 지원하지 않습니다. 기본값 반환.');
+      return { deposit: 0, buyableCash: 0 };
+    }
+
     const path = '/uapi/overseas-stock/v1/trading/foreign-margin';
-    const trId = this.config.isMock ? TR_CODES.OVERSEAS_MARGIN_MOCK : TR_CODES.OVERSEAS_MARGIN;
+    const trId = TR_CODES.OVERSEAS_MARGIN;
 
     const [accNo, accCode] = this.parseAccountNumber();
 

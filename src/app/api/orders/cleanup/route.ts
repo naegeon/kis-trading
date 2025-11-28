@@ -146,7 +146,7 @@ export async function POST(_request: Request) {
         });
         failedCount++;
 
-        await log('WARN', `고아 주문 취소 실패: ${order.kisOrderId}`, { error: errorMessage }, userId);
+        await log('WARN', `고아 주문 취소 실패: ${order.kisOrderId} - ${errorMessage}`, { error: errorMessage }, userId);
       }
     }
 
