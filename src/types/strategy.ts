@@ -37,9 +37,11 @@ export type SplitOrderParams = {
 
 // LOO/LOC Strategy Parameters (PRD.md Day 17-18)
 export type LooLocStrategyParams = {
-  // 최초 매수 (첫날 무조건 매수)
-  initialBuyQty: number;
-  initialBuyPrice: number; // 지정가
+  // [DEPRECATED] 최초 매수 - 더 이상 사용하지 않음 (KIS API 보유 조회로 대체)
+  // 기존 데이터 호환성을 위해 optional로 유지
+  initialBuyQty?: number;
+  initialBuyPrice?: number;
+  isFirstExecution?: boolean;
 
   // LOO (Limit-on-Open) 매수
   looEnabled: boolean;
@@ -52,10 +54,7 @@ export type LooLocStrategyParams = {
   // 목표 수익률 (익절 기준)
   targetReturnRate: number;
 
-  // 최초 실행 플래그 (첫 실행 시 initialBuyQty 매수 후 false로 변경)
-  isFirstExecution: boolean;
-
-  // Runtime state (평단가 관리)
+  // Runtime state (평단가 관리) - KIS API에서 조회하므로 더 이상 사용하지 않음
   currentAvgCost?: number;
   currentQty?: number;
 

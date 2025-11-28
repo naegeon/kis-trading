@@ -21,16 +21,15 @@ export const splitOrderStrategySchema = baseStrategyFields.extend({
 });
 
 // Base schema without refine (for extending) - PRD.md Day 17-18
+// [DEPRECATED] initialBuyQty, initialBuyPrice - 제거됨 (KIS API 보유 조회로 대체)
 const looLocStrategyBaseSchema = baseStrategyFields.extend({
   symbol: z.string().min(1, '종목코드를 입력해주세요.'),
-  initialBuyQty: z.number().int().positive('최초 매수 수량은 0보다 커야 합니다.'),
-  initialBuyPrice: z.number().positive('최초 매수 지정가는 0보다 커야 합니다.'),
   looEnabled: z.boolean(),
   looQty: z.number().int().positive('LOO 매수 수량은 0보다 커야 합니다.'),
   locBuyEnabled: z.boolean(),
   locBuyQty: z.number().int().positive('LOC 매수 수량은 0보다 커야 합니다.'),
   targetReturnRate: z.number().positive('목표 수익률은 0보다 커야 합니다.'),
-});;
+});
 
 // Export schema with refine for form validation
 export const looLocStrategySchema = looLocStrategyBaseSchema.refine(

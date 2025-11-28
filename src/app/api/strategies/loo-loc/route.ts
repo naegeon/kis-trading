@@ -88,12 +88,10 @@ export async function POST(req: Request) {
       await log('WARN', `Symbol lookup error for ${body.symbol}`, { error }, userId);
     }
 
-    // 서버에서 자동으로 설정하는 필드들 추가 (PRD 명세)
+    // 서버에서 자동으로 설정하는 필드들 추가
+    // [DEPRECATED] isFirstExecution, currentAvgCost, currentQty - KIS API 보유 조회로 대체
     const parameters = {
       ...body,
-      isFirstExecution: true,  // 최초 실행 플래그
-      currentAvgCost: 0,       // 현재 평단가
-      currentQty: 0,           // 현재 보유 수량
       exchangeCode,            // 거래소 코드
     };
 

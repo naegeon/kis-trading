@@ -3,7 +3,7 @@ import { KISClient } from '../kis/client';
 import { LooLocOrderToSubmit } from '@/types/order';
 import { db } from '../db/client';
 import { orders as ordersSchema, strategies as strategiesSchema } from '../db/schema';
-import { and, eq, gte, inArray } from 'drizzle-orm';
+import { and, eq, gte } from 'drizzle-orm';
 import { sendPushNotification } from '../push/notification';
 import { log } from '../logger';
 import { isUSWeekend, getUSMarketStatus, canEvaluateLOC, getMinutesSinceRegularMarketOpen } from '../market-hours';
@@ -45,75 +45,7 @@ export async function executeLooLocStrategy(
   const marketStatus = getUSMarketStatus();
   await log('INFO', `시장 상태: ${marketStatus.currentSession}, 서머타임: ${marketStatus.isDST ? '적용' : '미적용'}`, {}, strategy.userId, strategy.id);
 
-  // 1. 최초 실행 시 무조건 매수 (PRD Day 15-16)
-  if (params.isFirstExecution) {
-    // 최초 매수 수량이 0이면 스킵
-    if (params.initialBuyQty === 0) {
-      await log('INFO', `최초 매수 수량이 0이므로 스킵합니다.`, {}, strategy.userId, strategy.id);
-      
-      // isFirstExecution 플래그를 false로 업데이트 (중복 매수 방지)
-      await db.update(strategiesSchema).set({
-        parameters: {
-          ...params,
-          isFirstExecution: false,
-        },
-      }).where(eq(strategiesSchema.id, strategy.id));
-      
-      // 다음 로직(LOO/LOC 조건 평가)으로 진행
-    } else {
-      try {
-        const result = await kisClient.submitOrder({
-          symbol: strategy.symbol,
-          side: 'BUY',
-          orderType: 'LIMIT',  // 지정가 주문 (프리마켓/정규장/애프터마켓 모두 가능)
-          quantity: params.initialBuyQty,
-          price: params.initialBuyPrice,  // 사용자 지정 지정가
-          market: strategy.market, // 시장 구분 (US/KR)
-          exchangeCode: params.exchangeCode, // 거래소 코드
-        });
-
-        await db.insert(ordersSchema).values({
-          strategyId: strategy.id,
-          userId: strategy.userId,
-          kisOrderId: result.orderId,
-          symbol: strategy.symbol,
-          side: 'BUY',
-          orderType: 'LIMIT',
-          quantity: params.initialBuyQty,
-          price: params.initialBuyPrice.toString(),  // 지정가
-          status: 'SUBMITTED',
-          submittedAt: new Date(),
-        });
-
-        // isFirstExecution 플래그를 false로 업데이트 (중복 매수 방지)
-        await db.update(strategiesSchema).set({
-          parameters: {
-            ...params,
-            isFirstExecution: false,
-          },
-        }).where(eq(strategiesSchema.id, strategy.id));
-
-        await sendPushNotification(
-          strategy.userId,
-          'LOO/LOC 전략 시작',
-          `${strategy.name}: ${params.initialBuyQty}주 최초 매수 완료`
-        );
-
-        return; // 최초 매수만 하고 종료
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류';
-        console.error(`[${strategy.name}] 최초 매수 실패:`, error);
-        await sendPushNotification(
-          strategy.userId,
-          'LOO/LOC 전략 최초 매수 실패',
-          `${strategy.name}: 최초 매수 실패. 오류: ${errorMessage}`
-        );
-        return; // 최초 매수 실패 시 나머지 로직 실행 안 함
-      }
-    }
-  }
-
-  // 2. 중복 방지 및 미체결 주문 취소
+  // 1. 오늘자 주문 조회 및 중복 방지
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -126,22 +58,31 @@ export async function executeLooLocStrategy(
       )
     );
 
-  // 미체결 주문 필터링 (SUBMITTED 상태)
-  const pendingOrders = todayOrders.filter(o =>
-    o.status === 'SUBMITTED' &&
-    (o.orderType === 'LOO' || o.orderType === 'LOC' || o.orderType === 'LIMIT')
+  // 주문 타입별 미체결 주문 필터링 (SUBMITTED 상태)
+  const pendingLOOOrders = todayOrders.filter(o =>
+    o.status === 'SUBMITTED' && o.orderType === 'LOO'
+  );
+  const pendingLOCBuyOrders = todayOrders.filter(o =>
+    o.status === 'SUBMITTED' && o.orderType === 'LOC' && o.side === 'BUY'
+  );
+  const pendingLOCSellOrders = todayOrders.filter(o =>
+    o.status === 'SUBMITTED' && o.orderType === 'LOC' && o.side === 'SELL'
   );
 
-  // 미체결 주문이 있으면 모두 취소 (전략 수정 시 새로운 조건으로 재실행하기 위해)
-  if (pendingOrders.length > 0) {
-    await log('INFO', `${pendingOrders.length}개의 미체결 주문을 취소합니다.`, {}, strategy.userId, strategy.id);
+  // 전략 수정 여부 확인 (모든 미체결 주문 대상)
+  const allPendingOrders = [...pendingLOOOrders, ...pendingLOCBuyOrders, ...pendingLOCSellOrders];
+  const strategyUpdatedAt = strategy.updatedAt ? new Date(strategy.updatedAt) : new Date(0);
+  const strategyModifiedAfterOrder = allPendingOrders.some(order =>
+    order.submittedAt && strategyUpdatedAt > new Date(order.submittedAt)
+  );
 
-    for (const order of pendingOrders) {
+  // 전략이 수정되었으면 모든 미체결 주문 취소
+  if (strategyModifiedAfterOrder && allPendingOrders.length > 0) {
+    await log('INFO', `전략이 수정되어 ${allPendingOrders.length}개의 미체결 주문을 취소합니다.`, {}, strategy.userId, strategy.id);
+
+    for (const order of allPendingOrders) {
       try {
-        // kisOrderId가 null인 경우 스킵
-        if (!order.kisOrderId) {
-          continue;
-        }
+        if (!order.kisOrderId) continue;
 
         await kisClient.cancelOrder({
           kisOrderId: order.kisOrderId,
@@ -159,26 +100,26 @@ export async function executeLooLocStrategy(
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : '알 수 없는 오류';
         await log('WARN', `주문 취소 실패: ${order.kisOrderId}`, { error: errorMessage }, strategy.userId, strategy.id);
-        // 취소 실패해도 계속 진행
       }
     }
   }
 
-  // LOO/LOC 주문이 이미 있는지 확인 (체결된 주문 포함)
+  // LOO/LOC 주문이 이미 있는지 확인 (SUBMITTED 또는 체결된 주문 포함)
+  // ✅ SUBMITTED도 포함하여 중복 주문 방지
   const hasLOOOrder = todayOrders.some(o =>
     o.orderType === 'LOO' &&
     o.side === 'BUY' &&
-    (o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
+    (o.status === 'SUBMITTED' || o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
   );
   const hasLOCBuyOrder = todayOrders.some(o =>
     o.orderType === 'LOC' &&
     o.side === 'BUY' &&
-    (o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
+    (o.status === 'SUBMITTED' || o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
   );
   const hasLOCSellOrder = todayOrders.some(o =>
     o.orderType === 'LOC' &&
     o.side === 'SELL' &&
-    (o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
+    (o.status === 'SUBMITTED' || o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
   );
 
   // 3. KIS API를 통해 현재가 및 전일 종가 조회 (해외 주식용 API 사용)
@@ -197,8 +138,9 @@ export async function executeLooLocStrategy(
 
   await log('INFO', `시세 조회 완료: ${strategy.symbol} - 현재가: ${currentPrice}, 시가: ${openingPrice}, 전일종가: ${previousClose}`, {}, strategy.userId, strategy.id);
 
-  // 4. 사용자의 해당 종목 보유 수량 및 평단가 조회
-  const holdings = await getHoldings(strategy.userId, strategy.symbol);
+  // 4. KIS API를 통해 해당 종목 실제 보유 수량 및 평단가 조회
+  const holdings = await getHoldings(kisClient, strategy.symbol);
+  await log('INFO', `보유 조회 완료: ${strategy.symbol} - 보유수량: ${holdings.totalQuantity}주, 평단가: ${holdings.averagePrice.toFixed(2)}`, {}, strategy.userId, strategy.id);
   let { totalQuantity, averagePrice } = holdings;
 
   // 4.1 오늘 체결된 LOO 주문이 있으면 평단가에 반영
@@ -277,15 +219,18 @@ export async function executeLooLocStrategy(
           price: currentPrice, // LOC 주문은 가격을 지정하지 않으나, 기록을 위해 현재가 사용
           message: `LOC 매수 조건 충족: 현재가(${currentPrice}) < 보유 평단가(${averagePrice.toFixed(2)})`,
         });
-      } else if (totalQuantity === 0 && currentPrice < previousClose) {
-        // 최초 매수: 전일 종가보다 낮을 때
+      } else if (totalQuantity === 0 && openingPrice > 0 && currentPrice < openingPrice) {
+        // 최초 매수: 당일 음봉 (현재가 < 시초가)일 때만 LOC 매수
         ordersToSubmit.push({
           orderType: 'LOC',
           side: 'BUY',
           quantity: params.locBuyQty,  // LOC 전용 수량
           price: currentPrice, // LOC 주문은 가격을 지정하지 않으나, 기록을 위해 현재가 사용
-          message: `LOC 매수 조건 충족 (최초): 현재가(${currentPrice}) < 전일 종가(${previousClose})`,
+          message: `LOC 매수 조건 충족 (최초 - 음봉): 현재가(${currentPrice}) < 시초가(${openingPrice})`,
         });
+      } else if (totalQuantity === 0 && openingPrice === 0) {
+        // 프리마켓에서는 시초가가 0 → LOO 주문만 가능
+        await log('INFO', `LOC 매수: 시초가 미확정 (프리마켓). LOO 주문만 가능합니다.`, {}, strategy.userId, strategy.id);
       }
     } else if (marketStatus.isRegularMarket) {
       // 정규장이지만 10분 미경과
@@ -368,40 +313,26 @@ export async function executeLooLocStrategy(
 }
 
 /**
- * 특정 종목의 보유 수량과 평균 단가를 계산합니다.
- * @param userId - 사용자 ID
+ * KIS API를 통해 특정 종목의 실제 보유 수량과 평균 단가를 조회합니다.
+ * @param kisClient - KIS API 클라이언트
  * @param symbol - 종목 코드
  * @returns 보유 수량과 평균 단가
  */
-async function getHoldings(userId: string, symbol: string) {
-  const userOrders = await db.select().from(ordersSchema).where(
-    and(
-      eq(ordersSchema.userId, userId),
-      eq(ordersSchema.symbol, symbol),
-      inArray(ordersSchema.status, ['FILLED', 'PARTIALLY_FILLED'])
-    )
-  );
+async function getHoldings(kisClient: KISClient, symbol: string) {
+  try {
+    const holdings = await kisClient.getAccountHoldings();
+    const holding = holdings.find(h => h.symbol === symbol);
 
-  let totalQuantity = 0;
-  let totalValue = 0;
-
-  for (const order of userOrders) {
-    const quantity = order.filledQuantity || 0;
-    const price = parseFloat(order.avgPrice || '0');
-
-    if (order.side === 'BUY') {
-      totalQuantity += quantity;
-      totalValue += quantity * price;
-    } else { // SELL
-      totalQuantity -= quantity;
-      // 매도 시 가치는 평단가에 영향을 주지 않음 (수량만 차감)
-    }
+    return {
+      totalQuantity: holding?.quantity || 0,
+      averagePrice: holding?.averagePrice || 0,
+    };
+  } catch (error) {
+    console.error(`[getHoldings] KIS API 보유 조회 실패:`, error);
+    // API 실패 시 0 반환 (보유 없음으로 처리)
+    return {
+      totalQuantity: 0,
+      averagePrice: 0,
+    };
   }
-
-  const averagePrice = totalQuantity > 0 ? totalValue / totalQuantity : 0;
-
-  return {
-    totalQuantity,
-    averagePrice,
-  };
 }

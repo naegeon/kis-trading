@@ -27,7 +27,6 @@ export function LooLocForm({ strategyId, initialData }: LooLocFormProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-  const [initialBuyEnabled, setInitialBuyEnabled] = useState(true);
 
   type LooLocStrategyValues = z.infer<typeof looLocStrategySchema>;
 
@@ -36,12 +35,10 @@ export function LooLocForm({ strategyId, initialData }: LooLocFormProps) {
     defaultValues: {
       market: "US",
       symbol: "",
-      initialBuyQty: 10,
-      initialBuyPrice: 0,
-      looEnabled: false,
-      looQty: 5,
-      locBuyEnabled: false,
-      locBuyQty: 3,
+      looEnabled: true,  // 기본으로 LOO 활성화
+      looQty: 1,
+      locBuyEnabled: true,  // 기본으로 LOC도 활성화
+      locBuyQty: 1,
       targetReturnRate: 10,
       startDate: null,
       endDate: null,
@@ -52,19 +49,14 @@ export function LooLocForm({ strategyId, initialData }: LooLocFormProps) {
   useEffect(() => {
     if (initialData?.parameters) {
       const params = initialData.parameters as LooLocStrategyParams;
-      const initialQty = params.initialBuyQty || 0;
-
-      setInitialBuyEnabled(initialQty > 0);
 
       form.reset({
         market: initialData.market || "US",
         symbol: initialData.symbol,
-        initialBuyQty: initialQty,
-        initialBuyPrice: params.initialBuyPrice || 0,
-        looEnabled: params.looEnabled || false,
-        looQty: params.looQty || 5,
-        locBuyEnabled: params.locBuyEnabled || false,
-        locBuyQty: params.locBuyQty || 3,
+        looEnabled: params.looEnabled ?? true,
+        looQty: params.looQty || 1,
+        locBuyEnabled: params.locBuyEnabled ?? true,
+        locBuyQty: params.locBuyQty || 1,
         targetReturnRate: params.targetReturnRate || 10,
         startDate: initialData.startDate ? new Date(initialData.startDate) : null,
         endDate: initialData.endDate ? new Date(initialData.endDate) : null,
@@ -78,12 +70,6 @@ export function LooLocForm({ strategyId, initialData }: LooLocFormProps) {
     setSuccess(false);
 
     try {
-      // 최초 매수가 비활성화되면 수량을 0으로 설정
-      const submitValues = {
-        ...values,
-        initialBuyQty: initialBuyEnabled ? values.initialBuyQty : 0,
-      };
-
       const url = strategyId ? `/api/strategies/${strategyId}` : "/api/strategies/loo-loc";
       const method = strategyId ? "PUT" : "POST";
 
@@ -92,7 +78,7 @@ export function LooLocForm({ strategyId, initialData }: LooLocFormProps) {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(submitValues),
+        body: JSON.stringify(values),
       });
 
       const result = await response.json();
@@ -165,74 +151,12 @@ export function LooLocForm({ strategyId, initialData }: LooLocFormProps) {
           )}
         />
 
-        {/* 최초 매수 활성화 체크박스 */}
-        <div className="space-y-4 rounded-lg border p-4">
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="initialBuyEnabled"
-              checked={initialBuyEnabled}
-              onCheckedChange={(checked) => setInitialBuyEnabled(checked as boolean)}
-              disabled={isLoading}
-            />
-            <div className="space-y-1">
-              <label
-                htmlFor="initialBuyEnabled"
-                className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-              >
-                최초 매수 활성화
-              </label>
-              <p className="text-sm text-muted-foreground">
-                전략 시작 시 시장가로 즉시 매수합니다. (선택사항)
-              </p>
-            </div>
-          </div>
-
-          {initialBuyEnabled && (
-            <div className="ml-6 space-y-4">
-              <FormField
-                control={form.control}
-                name="initialBuyQty"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>최초 매수 수량 (주)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        placeholder="10"
-                        {...field}
-                        onChange={e => field.onChange(parseInt(e.target.value, 10))}
-                        disabled={isLoading}
-                      />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-              <FormField
-                control={form.control}
-                name="initialBuyPrice"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>최초 매수 지정가 (USD)</FormLabel>
-                    <FormControl>
-                      <Input
-                        type="number"
-                        placeholder="100.00"
-                        step="0.01"
-                        {...field}
-                        onChange={e => field.onChange(parseFloat(e.target.value))}
-                        disabled={isLoading}
-                      />
-                    </FormControl>
-                    <FormDescription>
-                      프리마켓/정규장/애프터마켓에서 이 가격 이하로 매수합니다. (지정가 당일 유효)
-                    </FormDescription>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-            </div>
-          )}
+        {/* LOO/LOC 매수 설명 */}
+        <div className="rounded-lg border p-4 bg-muted/50">
+          <p className="text-sm text-muted-foreground">
+            <strong>앞뒤로 전략</strong>: 계좌에 해당 종목이 없으면 LOO(전일 종가 기준 갭하락 시)로 매수를 시도하고,
+            LOO 미체결 시 LOC(당일 음봉 시)로 매수합니다. 보유 중이면 평단가 기준으로 LOO/LOC 매수를 진행합니다.
+          </p>
         </div>
 
         <FormField

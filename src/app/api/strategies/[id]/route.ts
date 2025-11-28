@@ -62,14 +62,11 @@ export async function PUT(request: Request, { params }: { params: { id: string }
       return api.error('Strategy not found or you do not have permission', 404);
     }
 
-    // Update strategy with server-managed fields (보존해야 할 필드들)
+    // Update strategy with server-managed fields
+    // [DEPRECATED] isFirstExecution, currentAvgCost, currentQty - KIS API 보유 조회로 대체
     const existingParams = existingStrategy.parameters as LooLocStrategyParams;
     const parameters = {
       ...body,
-      // 서버에서 관리하는 필드들 보존
-      isFirstExecution: existingParams?.isFirstExecution ?? true,
-      currentAvgCost: existingParams?.currentAvgCost ?? 0,
-      currentQty: existingParams?.currentQty ?? 0,
       // 거래소 코드 보존 (기존 값 유지 또는 기본값 NASD)
       exchangeCode: existingParams?.exchangeCode || 'NASD',
     };
