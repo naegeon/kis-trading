@@ -12,7 +12,13 @@ import { PageContainer } from '@/components/layout/PageContainer';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { ContentCard } from '@/components/layout/ContentCard';
 import { OrderMobileList } from '@/components/orders/OrderMobileCard';
-import { RefreshCw, Trash2 } from 'lucide-react';
+import { RefreshCw, Trash2, ChevronDown } from 'lucide-react';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type { Order, OrderStatus } from '@/types/order';
 import { useToast } from '@/hooks/use-toast';
 
@@ -58,17 +64,27 @@ export default function OrdersPage() {
     setIsRefreshing(false);
   };
 
-  const handleCleanupOrphans = async () => {
+  const handleCleanupOrphans = async (forceAll: boolean = false) => {
+    // 강제 모드일 때 확인 메시지
+    if (forceAll) {
+      const confirmed = window.confirm(
+        '모든 미체결 주문을 취소하시겠습니까?\n\n' +
+        '이 작업은 전략 상태와 관계없이 모든 SUBMITTED 상태의 주문을 취소합니다.'
+      );
+      if (!confirmed) return;
+    }
+
     setIsCleaningUp(true);
     try {
-      const response = await fetch('/api/orders/cleanup', {
+      const url = forceAll ? '/api/orders/cleanup?force=true' : '/api/orders/cleanup';
+      const response = await fetch(url, {
         method: 'POST',
       });
       const data = await response.json();
 
       if (data.success) {
         toast({
-          title: '고아 주문 정리 완료',
+          title: forceAll ? '전체 미체결 주문 정리 완료' : '고아 주문 정리 완료',
           description: `${data.cancelledCount}건 취소됨${data.failedCount > 0 ? `, ${data.failedCount}건 실패` : ''}`,
         });
         refreshOrders();
@@ -106,15 +122,36 @@ export default function OrdersPage() {
         ]}
         actions={
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleCleanupOrphans}
-              disabled={isCleaningUp}
-            >
-              <Trash2 className="h-4 w-4 mr-2" />
-              {isCleaningUp ? '정리 중...' : '고아 주문 정리'}
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isCleaningUp}
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  {isCleaningUp ? '정리 중...' : '주문 정리'}
+                  <ChevronDown className="h-4 w-4 ml-1" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => handleCleanupOrphans(false)}>
+                  고아 주문 정리
+                  <span className="text-xs text-muted-foreground ml-2">
+                    (비활성 전략)
+                  </span>
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => handleCleanupOrphans(true)}
+                  className="text-destructive"
+                >
+                  전체 미체결 취소
+                  <span className="text-xs text-muted-foreground ml-2">
+                    (모든 대기 주문)
+                  </span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
             <Button
               variant="outline"
               size="sm"

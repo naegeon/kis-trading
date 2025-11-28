@@ -15,13 +15,17 @@ export const dynamic = 'force-dynamic';
  * - 전략이 삭제되었거나 비활성화된 주문 취소
  * - DB에 SUBMITTED인데 전략이 없는 주문 정리
  */
-export async function POST(_request: Request) {
+export async function POST(request: Request) {
   const session = await auth();
   if (!session?.user?.id) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
   const userId = session.user.id;
+
+  // force=true면 모든 SUBMITTED 주문 정리 (전략 상태 무관)
+  const { searchParams } = new URL(request.url);
+  const forceAll = searchParams.get('force') === 'true';
 
   try {
     // 1. 사용자 API 자격증명 조회
@@ -57,9 +61,18 @@ export async function POST(_request: Request) {
 
     const activeStrategyIds = activeStrategies.map(s => s.id);
 
-    // 4. 고아 주문 조회 (SUBMITTED인데 전략이 삭제되었거나 비활성화된 주문)
+    // 4. 고아 주문 조회
     let orphanedOrders;
-    if (activeStrategyIds.length > 0) {
+    if (forceAll) {
+      // force=true: 모든 SUBMITTED 주문 정리 (전략 상태 무관)
+      orphanedOrders = await db.query.orders.findMany({
+        where: and(
+          eq(orders.userId, userId),
+          eq(orders.status, 'SUBMITTED')
+        ),
+      });
+    } else if (activeStrategyIds.length > 0) {
+      // 일반 모드: 전략이 삭제되었거나 비활성화된 주문만
       orphanedOrders = await db.query.orders.findMany({
         where: and(
           eq(orders.userId, userId),
@@ -88,7 +101,7 @@ export async function POST(_request: Request) {
       });
     }
 
-    await log('INFO', `고아 주문 정리 시작: ${orphanedOrders.length}건 발견`, {}, userId);
+    await log('INFO', `${forceAll ? '[강제 모드] ' : ''}고아 주문 정리 시작: ${orphanedOrders.length}건 발견`, {}, userId);
 
     // 5. 각 고아 주문 취소
     let cancelledCount = 0;
@@ -138,15 +151,38 @@ export async function POST(_request: Request) {
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
-        results.push({
-          orderId: order.id,
-          kisOrderId: order.kisOrderId,
-          status: 'failed',
-          error: errorMessage,
-        });
-        failedCount++;
+        // KIS에서 이미 취소/체결된 주문인 경우 DB만 업데이트
+        // "매매가능한 수량이 없습니다" = 이미 취소되었거나 체결된 주문
+        const isAlreadyCancelled = errorMessage.includes('매매가능한 수량이 없습니다') ||
+                                   errorMessage.includes('주문이 없습니다') ||
+                                   errorMessage.includes('already cancelled') ||
+                                   errorMessage.includes('not found');
 
-        await log('WARN', `고아 주문 취소 실패: ${order.kisOrderId} - ${errorMessage}`, { error: errorMessage }, userId);
+        if (isAlreadyCancelled) {
+          // KIS에서 이미 없는 주문이므로 DB 상태만 업데이트
+          await db.update(orders)
+            .set({ status: 'CANCELLED' })
+            .where(eq(orders.id, order.id));
+
+          results.push({
+            orderId: order.id,
+            kisOrderId: order.kisOrderId,
+            status: 'cancelled_already_done',
+          });
+          cancelledCount++;
+
+          await log('INFO', `고아 주문 DB 정리 (KIS에서 이미 취소됨): ${order.kisOrderId}`, {}, userId);
+        } else {
+          results.push({
+            orderId: order.id,
+            kisOrderId: order.kisOrderId,
+            status: 'failed',
+            error: errorMessage,
+          });
+          failedCount++;
+
+          await log('WARN', `고아 주문 취소 실패: ${order.kisOrderId} - ${errorMessage}`, { error: errorMessage }, userId);
+        }
       }
     }
 
