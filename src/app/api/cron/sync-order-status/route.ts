@@ -330,6 +330,19 @@ async function syncOrderStatusHandler(req: Request) {
                 continue;
               }
 
+              // LOO/LOC 주문은 시장 개장 전에 sync하지 않음 (체결내역 API에 나타나지 않기 때문)
+              if ((order.orderType === 'LOO' || order.orderType === 'LOC') && strategy.market === 'US') {
+                const now = new Date();
+                const kstHour = now.getHours();
+                const kstMinute = now.getMinutes();
+                // US 정규장: 23:30 ~ 06:00 KST
+                const isUSMarketOpen = (kstHour >= 23 && kstMinute >= 30) || (kstHour < 6);
+                if (!isUSMarketOpen) {
+                  await log('INFO', `Order ${order.id} is a ${order.orderType} order. Skipping sync until market opens.`, { orderType: order.orderType, symbol: order.symbol }, userId, strategyId);
+                  continue;
+                }
+              }
+
               try {
                 // Fetch order details from KIS API (시장별로 다른 파라미터 전달)
                 const strategyParams = strategy.parameters as Record<string, unknown>;
