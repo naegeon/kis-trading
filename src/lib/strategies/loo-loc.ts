@@ -132,10 +132,11 @@ export async function executeLooLocStrategy(
     (o.status === 'FILLED' || o.status === 'PARTIALLY_FILLED')
   );
 
-  // 최종 판단: KIS 미체결 또는 DB 체결이 있으면 해당 주문 스킵
-  const hasLOOOrder = kisHasLOOOrder || dbHasFilledLOOOrder;
-  const hasLOCBuyOrder = kisHasLOCBuyOrder || dbHasFilledLOCBuyOrder;
-  const hasLOCSellOrder = kisHasLOCSellOrder || dbHasFilledLOCSellOrder;
+  // 최종 판단: KIS 미체결 또는 DB 체결/미체결이 있으면 해당 주문 스킵
+  // ⚠️ KIS 미체결 API가 LOO/LOC 주문을 반환하지 않는 경우가 있으므로 DB SUBMITTED도 체크 필수
+  const hasLOOOrder = kisHasLOOOrder || dbHasFilledLOOOrder || pendingLOOOrders.length > 0;
+  const hasLOCBuyOrder = kisHasLOCBuyOrder || dbHasFilledLOCBuyOrder || pendingLOCBuyOrders.length > 0;
+  const hasLOCSellOrder = kisHasLOCSellOrder || dbHasFilledLOCSellOrder || pendingLOCSellOrders.length > 0;
 
   // DB와 KIS 상태 불일치 경고 (DB는 CANCELLED인데 KIS에 미체결 있는 경우)
   if (kisUnfilledOrders.length > 0) {
