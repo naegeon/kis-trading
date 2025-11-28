@@ -16,26 +16,23 @@ describe('Encryption Utility', () => {
   it('should throw an error when trying to decrypt with invalid format', () => {
     const invalidEncryptedText = 'invalid-format';
 
-    // Expect the decrypt function to throw an error
-    expect(() => decrypt(invalidEncryptedText)).toThrow('Invalid encrypted text format.');
+    // Expect the decrypt function to throw an error (updated error message)
+    expect(() => decrypt(invalidEncryptedText)).toThrow('Invalid encrypted data format. Expected format: iv:authTag:encryptedData');
   });
 
   it('should throw an error for corrupted data (e.g., wrong authTag)', () => {
     const originalText = 'some data';
     const encryptedText = encrypt(originalText);
     const parts = encryptedText.split(':');
-    
+
     // Tamper with the encrypted part
     const corruptedEncrypted = `${parts[0]}:${parts[1]}:` + '00'.repeat(parts[2].length / 2);
 
-    expect(() => decrypt(corruptedEncrypted)).toThrow('Decryption failed. The key may be incorrect or the data corrupted.');
+    expect(() => decrypt(corruptedEncrypted)).toThrow('Decryption failed');
   });
 
-  it('should work with empty strings', () => {
-    const originalText = '';
-    const encryptedText = encrypt(originalText);
-    const decryptedText = decrypt(encryptedText);
-
-    expect(decryptedText).toBe(originalText);
+  it('should throw error for empty strings', () => {
+    // Phase 3: 빈 문자열 검증 강화됨
+    expect(() => encrypt('')).toThrow('Encryption input must be a non-empty string');
   });
 });

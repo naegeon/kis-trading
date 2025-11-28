@@ -1,3 +1,20 @@
+// Mock 설정 (split-order.ts의 의존성 해결)
+jest.mock('@/lib/db/client', () => ({
+  db: {
+    select: jest.fn(),
+    update: jest.fn(),
+    insert: jest.fn(),
+  },
+}));
+
+jest.mock('@/lib/logger', () => ({
+  log: jest.fn(),
+}));
+
+jest.mock('@/lib/push/notification', () => ({
+  sendPushNotification: jest.fn(),
+}));
+
 import {
   calculatePyramidDistribution,
   calculateEqualDistribution,
