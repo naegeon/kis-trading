@@ -1,0 +1,18 @@
+{
+  "recommendations": [
+    // 코드 품질 및 스타일
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+
+    // 프레임워크 및 라이브러리 지원
+    "bradlc.vscode-tailwindcss",
+    "local-drizzle.drizzle-vscode",
+
+    // 테스트
+    "ms-playwright.playwright",
+
+    // Git 및 협업
+    "eamodio.gitlens",
+    "vivaxy.vscode-conventional-commits"
+  ]
+}

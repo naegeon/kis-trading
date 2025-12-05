@@ -1,0 +1,29 @@
+name: Sync Order Status - Batch 1 (Users 1-5)
+
+on:
+  schedule:
+    # 10분마다 실행
+    - cron: '2,12,22,32,42,52 * * * *'
+
+  # 수동 실행도 가능하도록 설정
+  workflow_dispatch:
+
+jobs:
+  sync-batch1:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Sync Order Status Batch 1
+        run: |
+          curl -X POST "${{ secrets.VERCEL_APP_URL }}/api/cron/sync-order-status?batch=0&batchSize=5" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --fail \
+            --silent \
+            --show-error
+
+      - name: Log execution
+        if: always()
+        run: |
+          echo "Batch 1 order sync triggered at $(date)"
+          echo "Processing users 1-5"

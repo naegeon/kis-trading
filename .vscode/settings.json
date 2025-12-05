@@ -1,0 +1,13 @@
+{
+  // 파일 감시자(Watcher)가 node_modules 폴더를 감시하지 않도록 설정하여
+  // 파일 변경 자동 감지 성능을 향상시킵니다.
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/*/**": true
+  },
+  // 이 프로젝트의 기본 포맷터를 Prettier로 설정합니다.
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  // 파일을 저장할 때마다 자동으로 포맷팅을 실행합니다.
+  "editor.formatOnSave": true
+}

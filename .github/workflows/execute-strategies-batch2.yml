@@ -1,0 +1,29 @@
+name: Execute Strategies - Batch 2 (Users 6-10)
+
+on:
+  schedule:
+    # 10분마다 실행, 배치1과 5분 오프셋 (5분, 15분, 25분, 35분, 45분, 55분)
+    - cron: '5,15,25,35,45,55 * * * *'
+
+  # 수동 실행도 가능하도록 설정
+  workflow_dispatch:
+
+jobs:
+  execute-batch2:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Execute Batch 2 Strategies
+        run: |
+          curl -X POST "${{ secrets.VERCEL_APP_URL }}/api/cron/execute-strategies?batch=1&batchSize=5" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            --fail \
+            --silent \
+            --show-error
+
+      - name: Log execution
+        if: always()
+        run: |
+          echo "Batch 2 execution triggered at $(date)"
+          echo "Processing users 6-10"
