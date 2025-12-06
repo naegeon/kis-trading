@@ -350,24 +350,22 @@ async function syncOrderStatusHandler(req: Request) {
                 const rawExchangeCode = strategyParams?.exchangeCode;
                 const exchangeCode = isValidExchangeCode(rawExchangeCode) ? rawExchangeCode : 'NASD';
 
-                // LOO/LOC 주문은 알고리즘 체결 조회 API 사용 (일반 체결 조회로는 조회 불가)
-                const isAlgoOrder = order.orderType === 'LOO' || order.orderType === 'LOC';
-                let kisOrderDetails;
+                // 주문 체결 조회 (LOO/LOC 포함 모든 주문)
+                const kisOrderDetails = await kisClient.getOrderDetail(
+                  order.kisOrderId,
+                  order.symbol,
+                  strategy.market,
+                  exchangeCode
+                );
 
-                if (isAlgoOrder && strategy.market === 'US') {
-                  // 알고리즘 주문 체결 조회 (LOO/LOC)
-                  const orderDate = order.submittedAt
-                    ? `${order.submittedAt.getFullYear()}${String(order.submittedAt.getMonth() + 1).padStart(2, '0')}${String(order.submittedAt.getDate()).padStart(2, '0')}`
-                    : undefined;
-                  kisOrderDetails = await kisClient.getAlgoOrderDetail(order.kisOrderId, orderDate);
-                } else {
-                  // 일반 주문 체결 조회
-                  kisOrderDetails = await kisClient.getOrderDetail(
-                    order.kisOrderId,
-                    order.symbol,
-                    strategy.market,
-                    exchangeCode
-                  );
+                // LOO/LOC 주문 체결 조회 디버깅
+                if (order.orderType === 'LOO' || order.orderType === 'LOC') {
+                  await log('INFO', `[DEBUG] ${order.orderType} order detail response`, {
+                    orderId: order.kisOrderId,
+                    symbol: order.symbol,
+                    orderType: order.orderType,
+                    kisResponse: kisOrderDetails,
+                  }, userId, strategyId);
                 }
 
                 let newStatus = order.status;

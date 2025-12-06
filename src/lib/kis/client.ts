@@ -915,6 +915,10 @@ export class KISClient {
 
       const response = await this._request('GET', path, trId, {}, params) as KISOrderDetailResponse;
 
+      // DEBUG: KIS API 원본 응답 로깅
+      // eslint-disable-next-line no-console
+      console.log(`[KISClient.getOrderDetail] orderId=${orderId}, response:`, JSON.stringify(response, null, 2));
+
       // 주문을 찾을 수 없는 경우 (취소/만료된 주문)
       if (response.rt_cd !== '0') {
         if (response.msg_cd === 'APBK0013' || response.msg1?.includes('조회할 자료가 없습니다')) {
