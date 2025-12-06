@@ -7,7 +7,6 @@ import { api } from '@/lib/api';
 import { z } from 'zod';
 import { looLocStrategySchema } from '@/lib/validations/strategy';
 import { NextResponse } from 'next/server';
-import { LooLocStrategyParams } from '@/types/strategy';
 import { KISClient } from '@/lib/kis/client';
 import { getDecryptedCredentials } from '@/lib/crypto/encryption';
 import { executeStrategyImmediately } from '@/lib/strategies/executor';

@@ -6,7 +6,7 @@ import { KISClient } from '@/lib/kis/client';
 import { getDecryptedCredentials } from '@/lib/crypto/encryption';
 import { log } from '@/lib/logger';
 import { Order } from '@/types/order';
-import { Strategy, LooLocStrategyParams } from '@/types/strategy';
+import { Strategy } from '@/types/strategy';
 import { sendPushNotification } from '@/lib/push/notification';
 import { calculateDailyStrategyMetrics } from '@/lib/performance/calculator';
 import { KISHolding } from '@/lib/kis/types';

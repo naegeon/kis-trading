@@ -87,7 +87,7 @@ export async function PUT(
       }
     }
     // 종목이 같은데 exchangeCode가 없는 경우도 조회 (기존 전략 호환)
-    else if (dbMarket === 'US' && !existingParams.exchangeCode) {
+    else if (dbMarket === 'US' && !existingParams?.exchangeCode) {
       const userCredentials = await db.query.credentials.findFirst({
         where: eq(credentials.userId, userId),
       });
@@ -124,8 +124,8 @@ export async function PUT(
         : 'EQUAL',
       targetReturnRate: body.targetReturnRate,
       // Preserve existing runtime state
-      currentAvgCost: existingParams.currentAvgCost ?? 0,
-      currentQty: existingParams.currentQty ?? 0,
+      currentAvgCost: existingParams?.currentAvgCost ?? 0,
+      currentQty: existingParams?.currentQty ?? 0,
       // 주간매매 플래그 저장
       isDaytime: body.market === 'US_DAYTIME',
       // 거래소 코드 저장 (자동 조회 결과)

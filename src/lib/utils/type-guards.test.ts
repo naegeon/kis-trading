@@ -68,6 +68,7 @@ describe('isSplitOrderParams', () => {
   });
 
   it('should return false for missing required fields', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { basePrice, ...missing } = validParams;
     expect(isSplitOrderParams(missing)).toBe(false);
   });
@@ -137,6 +138,7 @@ describe('isLooLocParams', () => {
   });
 
   it('should return false for missing required fields', () => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { looEnabled, ...missing } = validParams;
     expect(isLooLocParams(missing)).toBe(false);
   });

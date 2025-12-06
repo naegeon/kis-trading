@@ -3,6 +3,8 @@
  * Phase 4: 에러 처리 일관화
  */
 
+/* eslint-disable @typescript-eslint/no-require-imports */
+
 import {
   getErrorMessage,
   getErrorStatusCode,
