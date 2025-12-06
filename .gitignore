@@ -53,3 +53,6 @@ drizzle/
 /test-results/
 
 .vercel
+
+# KIS API 샘플 코드 (참조용)
+kis-api-examples/

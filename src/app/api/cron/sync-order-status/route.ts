@@ -106,6 +106,13 @@ async function cancelExpiredOrders(): Promise<void> {
         continue;
       }
 
+      // LOO/LOC 주문은 자동 취소하지 않음 (체결 확인이 sync를 통해 이루어져야 함)
+      // LOO는 장 시작에, LOC는 장 마감에 체결되므로 일반 주문과 다른 생명주기를 가짐
+      if (order.orderType === 'LOO' || order.orderType === 'LOC') {
+        await log('INFO', `Skipping ${order.orderType} order ${order.id} from auto-cancellation. Will be handled by sync.`, { symbol: order.symbol }, order.userId, order.strategyId || undefined);
+        continue;
+      }
+
       const isMarketClosed = checkMarketClosed(order.strategy.market, now);
 
       if (isMarketClosed) {
@@ -331,17 +338,10 @@ async function syncOrderStatusHandler(req: Request) {
                 continue;
               }
 
-              // LOO/LOC 주문은 시장 개장 전에 sync하지 않음 (체결내역 API에 나타나지 않기 때문)
-              if ((order.orderType === 'LOO' || order.orderType === 'LOC') && strategy.market === 'US') {
-                const now = new Date();
-                const kstHour = now.getHours();
-                const kstMinute = now.getMinutes();
-                // US 정규장: 23:30 ~ 06:00 KST
-                const isUSMarketOpen = (kstHour >= 23 && kstMinute >= 30) || (kstHour < 6);
-                if (!isUSMarketOpen) {
-                  await log('INFO', `Order ${order.id} is a ${order.orderType} order. Skipping sync until market opens.`, { orderType: order.orderType, symbol: order.symbol }, userId, strategyId);
-                  continue;
-                }
+              // LOO/LOC 주문은 장 마감 후에도 항상 체결 확인 (체결 데이터는 장 마감 후에 조회 가능)
+              // 이전 버그: 장 마감 후 sync를 스킵하여 체결 확인이 영원히 안 됨
+              if (order.orderType === 'LOO' || order.orderType === 'LOC') {
+                await log('INFO', `Checking ${order.orderType} order ${order.id} fill status...`, { orderType: order.orderType, symbol: order.symbol }, userId, strategyId);
               }
 
               try {
@@ -350,7 +350,7 @@ async function syncOrderStatusHandler(req: Request) {
                 const rawExchangeCode = strategyParams?.exchangeCode;
                 const exchangeCode = isValidExchangeCode(rawExchangeCode) ? rawExchangeCode : 'NASD';
 
-                // 주문 체결 조회 (LOO/LOC 포함 모든 주문)
+                // 모든 주문(LOO/LOC 포함)은 동일한 체결조회 API 사용 (TTTS3035R)
                 const kisOrderDetails = await kisClient.getOrderDetail(
                   order.kisOrderId,
                   order.symbol,
