@@ -52,6 +52,7 @@ const TR_CODES = {
   OVERSEAS_DAYTIME_SELL: 'TTTS6037U', // 미국 주식 주간매도 (실거래, 모의투자 미지원)
   OVERSEAS_DAYTIME_CANCEL: 'TTTS6038U', // 미국 주식 주간정정취소 (실거래, 모의투자 미지원)
   OVERSEAS_UNFILLED: 'TTTS3018R', // 해외 주식 미체결 조회 (실거래, 모의투자 미지원)
+  OVERSEAS_ALGO_CCNL: 'TTTS6059R', // 해외 주식 알고리즘 체결 조회 (LOO/LOC 등) (실거래, 모의투자 미지원)
 
   // 모의투자
   OVERSEAS_ORDER_BUY_MOCK: 'VTTT1002U', // 미국 주식 매수 (모의투자)
@@ -1024,6 +1025,141 @@ export class KISClient {
         filledQuantity: filledQty,
         avgPrice: parseFloat(detail.avg_prvs || '0'),
       };
+    }
+  }
+
+  /**
+   * LOO/LOC 알고리즘 주문 체결 내역 조회 (해외 주식)
+   * 일반 체결 조회(inquire-ccnl)와 달리 LOO/LOC 등 알고리즘 주문은 별도 API 사용
+   * @param orderId 주문번호
+   * @param orderDate 주문일자 (YYYYMMDD 형식, 옵션)
+   * @returns KISOrderDetail 체결 상세 정보
+   */
+  async getAlgoOrderDetail(orderId: string, orderDate?: string): Promise<KISOrderDetail> {
+    // 모의투자는 알고리즘 주문 체결 조회 미지원
+    if (this.config.isMock) {
+      // 모의투자에서는 일반 체결 조회로 대체 시도
+      return {
+        status: 'SUBMITTED',
+        filledQuantity: 0,
+        avgPrice: 0,
+      };
+    }
+
+    const [accNo, accCode] = this.parseAccountNumber();
+    const trId = TR_CODES.OVERSEAS_ALGO_CCNL;
+    const path = '/uapi/overseas-stock/v1/trading/inquire-algo-ccnl';
+
+    // 주문일자 기본값: 오늘
+    const today = new Date();
+    const formatDate = (date: Date): string => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}${month}${day}`;
+    };
+
+    const params: Record<string, string> = {
+      CANO: accNo,
+      ACNT_PRDT_CD: accCode,
+      ORD_DT: orderDate || formatDate(today),
+      ORD_GNO_BRNO: '',      // 주문채번지점번호 (공백=전체)
+      ODNO: orderId,         // 주문번호
+      TTLZ_ICLD_YN: 'Y',     // 합산포함여부
+      CTX_AREA_NK200: '',
+      CTX_AREA_FK200: '',
+    };
+
+    try {
+      interface AlgoOrderResponse {
+        rt_cd: string;
+        msg_cd: string;
+        msg1?: string;
+        output?: Array<{
+          odno: string;           // 주문번호
+          pdno?: string;          // 종목코드
+          ord_qty?: string;       // 주문수량
+          tot_ccld_qty?: string;  // 총체결수량
+          avg_prvs?: string;      // 체결평균가
+          ccld_cnfm_yn?: string;  // 체결확인여부
+          cncl_yn?: string;       // 취소여부
+        }>;
+        output3?: Array<{
+          tot_ord_qty?: string;   // 총주문수량
+          tot_ccld_qty?: string;  // 총체결수량
+          avg_prvs?: string;      // 체결평균가
+        }>;
+      }
+
+      const response = await this._request('GET', path, trId, {}, params) as AlgoOrderResponse;
+
+      // API 에러 응답 처리
+      if (response.rt_cd !== '0') {
+        if (response.msg_cd === 'APBK0013' || response.msg1?.includes('조회할 자료가 없습니다')) {
+          // 주문이 존재하지 않음 (취소 또는 만료)
+          return {
+            status: 'CANCELLED',
+            filledQuantity: 0,
+            avgPrice: 0,
+          };
+        }
+        throw new KISAPIError(`Algo order detail fetch failed: ${response.msg1} (rt_cd: ${response.rt_cd})`);
+      }
+
+      // output3 (합산 정보)를 우선 사용
+      if (response.output3 && response.output3.length > 0) {
+        const summary = response.output3[0];
+        const totalQty = parseInt(summary.tot_ord_qty || '0', 10);
+        const filledQty = parseInt(summary.tot_ccld_qty || '0', 10);
+        const avgPrice = parseFloat(summary.avg_prvs || '0');
+
+        let status: KISOrderDetail['status'] = 'SUBMITTED';
+        if (filledQty === totalQty && totalQty > 0) {
+          status = 'FILLED';
+        } else if (filledQty > 0) {
+          status = 'PARTIALLY_FILLED';
+        }
+
+        return {
+          status,
+          filledQuantity: filledQty,
+          avgPrice,
+        };
+      }
+
+      // output (개별 체결 내역) 사용
+      if (response.output && response.output.length > 0) {
+        const detail = response.output.find(item => item.odno === orderId) || response.output[0];
+        const totalQty = parseInt(detail.ord_qty || '0', 10);
+        const filledQty = parseInt(detail.tot_ccld_qty || '0', 10);
+        const avgPrice = parseFloat(detail.avg_prvs || '0');
+
+        let status: KISOrderDetail['status'] = 'SUBMITTED';
+        if (detail.cncl_yn === 'Y') {
+          status = 'CANCELLED';
+        } else if (filledQty === totalQty && totalQty > 0) {
+          status = 'FILLED';
+        } else if (filledQty > 0) {
+          status = 'PARTIALLY_FILLED';
+        }
+
+        return {
+          status,
+          filledQuantity: filledQty,
+          avgPrice,
+        };
+      }
+
+      // 데이터가 없으면 기본값 반환
+      return {
+        status: 'SUBMITTED',
+        filledQuantity: 0,
+        avgPrice: 0,
+      };
+    } catch (error) {
+      if (error instanceof KISAPIError) throw error;
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new KISAPIError(`Algo order detail fetch failed: ${errorMessage}`);
     }
   }
 
